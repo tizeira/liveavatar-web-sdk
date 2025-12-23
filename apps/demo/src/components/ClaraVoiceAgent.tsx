@@ -9,7 +9,8 @@ import {
   WidgetState,
   CustomerData,
 } from "../liveavatar";
-import { useScreenSize, useFixedHeight, useElevenLabsAgent } from "../hooks";
+import { useScreenSize, useFixedHeight } from "../hooks";
+import { useOpenAIRealtimeAgent } from "../hooks/useOpenAIRealtimeAgent";
 
 // shadcn/ui components
 import { Button } from "./ui/button";
@@ -377,7 +378,7 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
 
   // Session limit state
   const [sessionSecondsRemaining, setSessionSecondsRemaining] = useState(
-    SESSION_LIMIT_MINUTES * 60
+    SESSION_LIMIT_MINUTES * 60,
   );
   const [showExpiryWarning, setShowExpiryWarning] = useState(false);
   const sessionTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -524,7 +525,7 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
     }, 50);
   }, [sendAllAudioToAvatar]);
 
-  // ElevenLabs Agent hook - SIMPLIFIED: accumulate all audio, send at end
+  // OpenAI Realtime Agent hook - audio is already 24kHz (no resample needed!)
   const {
     isConnected: isAgentConnected,
     isListening,
@@ -535,7 +536,7 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
     startListening,
     stopListening,
     error: agentError,
-  } = useElevenLabsAgent({
+  } = useOpenAIRealtimeAgent({
     onAudioData: (audioBase64) => {
       // Accumulate chunks and track timing for gap detection
       totalChunksReceivedRef.current++;
@@ -586,7 +587,7 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
     },
     onInterruption: () => {
       // User interrupted - NOW we clear the buffer (old response audio)
-      // This is the right moment because ElevenLabs confirms the interruption
+      // This is the right moment because OpenAI confirms the interruption via VAD
       console.log("[AUDIO] Interruption confirmed - clearing old buffer");
       if (gapCheckIntervalRef.current) {
         clearInterval(gapCheckIntervalRef.current);
@@ -602,7 +603,7 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
     onUserTranscript: (text) => {
       console.log("[AUDIO] User said:", text);
 
-      // Filter out noise/empty transcripts (ElevenLabs VAD sometimes sends "..." for silence)
+      // Filter out noise/empty transcripts (VAD sometimes sends "..." for silence)
       const cleanText = text?.trim().replace(/\./g, "").trim() || "";
       if (cleanText.length < 2) {
         console.log("[AUDIO] Ignoring noise/empty transcript:", text);
@@ -610,7 +611,7 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       }
 
       // Clear buffer immediately when user speaks - prevents old audio mixing with new response
-      // We do this here because onInterruption event from ElevenLabs is unreliable
+      // This is a backup in case the VAD interruption event is delayed
       if (gapCheckIntervalRef.current) {
         clearInterval(gapCheckIntervalRef.current);
         gapCheckIntervalRef.current = null;
@@ -646,12 +647,12 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
     }
   }, [isStreamReady, attachElement]);
 
-  // Connect to ElevenLabs agent when avatar stream is ready
+  // Connect to OpenAI Realtime agent when avatar stream is ready
   useEffect(() => {
     // Use ref flag to ensure we only connect once
     if (isStreamReady && !hasConnectedAgentRef.current) {
       hasConnectedAgentRef.current = true;
-      console.log("Connecting to ElevenLabs agent...");
+      console.log("Connecting to OpenAI Realtime agent...");
       connectAgent();
     }
   }, [isStreamReady, connectAgent]);
@@ -853,7 +854,7 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
     setError(null);
 
     try {
-      // Use CUSTOM mode for Voice Agent (we handle STT/LLM/TTS via ElevenLabs)
+      // Use CUSTOM mode for Voice Agent (we handle STT/LLM/TTS via OpenAI Realtime)
       const res = await fetch("/api/start-custom-session", {
         method: "POST",
         headers: {

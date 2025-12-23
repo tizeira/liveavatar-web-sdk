@@ -1,6 +1,6 @@
 {
   "project": "Clara Voice Agent",
-  "lastUpdated": "2025-12-21",
+  "lastUpdated": "2025-12-23",
   "features": [
     {
       "id": "core-voice-agent",
@@ -71,6 +71,24 @@
       "priority": "MEDIUM",
       "status": "pending",
       "passes": false
+    },
+    {
+      "id": "openai-realtime-integration",
+      "name": "OpenAI Realtime Voice Agent",
+      "description": "Replace ElevenLabs with OpenAI Realtime API (GPT-4o-mini) for 6x cost reduction",
+      "priority": "HIGH",
+      "status": "in_progress",
+      "passes": false,
+      "branch": "claude/integrate-openai-voice-agent-h7m2K",
+      "startedDate": "2025-12-23",
+      "estimatedCostSavings": "83%",
+      "tasks": [
+        "API route for ephemeral tokens",
+        "useOpenAIRealtimeAgent hook",
+        "24kHz audio pipeline",
+        "ClaraVoiceAgent integration",
+        "End-to-end testing"
+      ]
     }
   ],
   "deployments": {

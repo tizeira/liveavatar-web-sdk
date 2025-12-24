@@ -395,20 +395,9 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
   const lastChunkTimeRef = useRef<number>(0);
   const gapCheckIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Constants for TWO-PHASE audio sending strategy
-  // Phase 1: Send first chunks IMMEDIATELY (contains first words)
-  // Phase 2: Buffer remaining chunks with gap detection
-  const IMMEDIATE_SEND_CHUNKS = 2; // Send first 2 chunks without delay (first words)
-  const IMMEDIATE_SEND_DELAY = 80; // ms to wait for chunks to arrive together
-  const CHUNK_GAP_THRESHOLD = 250; // ms gap = end of stream (for remaining chunks)
-
-  // Ref for immediate send timeout
-  const immediateSendTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const hassentImmediateRef = useRef(false); // Track if we already sent immediate chunks
-
-  // Track if this is the first audio response (for initial greeting sync)
-  // The first audio needs extra delay to sync lip sync with audio playback
-  const isFirstAudioRef = useRef(true);
+  // Audio buffer strategy: Accumulate all chunks until response.audio.done
+  // Gap detection is used as a fallback (800ms is tolerant to network latency)
+  const CHUNK_GAP_THRESHOLD = 800; // ms gap = end of stream (fallback, more tolerant)
 
   // Concatenate base64 audio chunks into a single base64 string
   const concatenateBase64Audio = useCallback((chunks: string[]): string => {
@@ -447,18 +436,12 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
     return btoa(binary);
   }, []);
 
-  // Send ALL accumulated audio to avatar (called when gap detected or agent_response_end)
+  // Send ALL accumulated audio to avatar (called when response.audio.done or gap detected)
   const sendAllAudioToAvatar = useCallback(() => {
     // Clear any pending gap check
     if (gapCheckIntervalRef.current) {
       clearInterval(gapCheckIntervalRef.current);
       gapCheckIntervalRef.current = null;
-    }
-
-    // Also clear immediate send timeout
-    if (immediateSendTimeoutRef.current) {
-      clearTimeout(immediateSendTimeoutRef.current);
-      immediateSendTimeoutRef.current = null;
     }
 
     if (audioBufferRef.current.length === 0) {
@@ -474,31 +457,13 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
     if (!concatenatedAudio || !sessionRef.current) return;
 
     const sizeKB = Math.round(concatenatedAudio.length / 1024);
-    const isFirstAudio = isFirstAudioRef.current;
+    console.log(`[AUDIO] Sending: ${chunks.length} chunks, ${sizeKB}KB total`);
 
-    // Sin sync delay - enviar inmediatamente para mejor experiencia
-    // El avatar de HeyGen maneja su propio buffering interno
-    const syncDelay = 0;
-
-    if (isFirstAudio) {
-      isFirstAudioRef.current = false;
-      console.log(
-        `[AUDIO] First greeting: ${chunks.length} chunks, ${sizeKB}KB - sync delay: ${syncDelay}ms`,
-      );
-    } else {
-      console.log(
-        `[AUDIO] Sending response: ${chunks.length} chunks, ${sizeKB}KB total`,
-      );
+    try {
+      sessionRef.current.repeatAudio(concatenatedAudio);
+    } catch (error) {
+      console.error("Error sending audio to avatar:", error);
     }
-
-    // Apply sync delay for first audio to align lip sync with audio playback
-    setTimeout(() => {
-      try {
-        sessionRef.current?.repeatAudio(concatenatedAudio);
-      } catch (error) {
-        console.error("Error sending audio to avatar:", error);
-      }
-    }, syncDelay);
   }, [concatenateBase64Audio, sessionRef]);
 
   // Start gap detection - checks if stream ended by detecting pause between chunks
@@ -538,44 +503,16 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
     error: agentError,
   } = useOpenAIRealtimeAgent({
     onAudioData: (audioBase64) => {
-      // Accumulate chunks and track timing for gap detection
+      // Accumulate all chunks - wait for response.audio.done to send
       totalChunksReceivedRef.current++;
       audioBufferRef.current.push(audioBase64);
-      lastChunkTimeRef.current = Date.now(); // Update last chunk time
+      lastChunkTimeRef.current = Date.now();
 
-      const currentBufferLength = audioBufferRef.current.length;
       console.log(
-        `[AUDIO] Chunk #${totalChunksReceivedRef.current} buffered (${currentBufferLength} total)`,
+        `[AUDIO] Chunk #${totalChunksReceivedRef.current} buffered (${audioBufferRef.current.length} total)`,
       );
 
-      // TWO-PHASE STRATEGY:
-      // Phase 1: Send first chunks IMMEDIATELY (contains first words - reduces perceived latency)
-      if (
-        !hassentImmediateRef.current &&
-        currentBufferLength <= IMMEDIATE_SEND_CHUNKS
-      ) {
-        // Clear any existing immediate timeout
-        if (immediateSendTimeoutRef.current) {
-          clearTimeout(immediateSendTimeoutRef.current);
-        }
-
-        // Wait a tiny bit for chunks to arrive together, then send
-        immediateSendTimeoutRef.current = setTimeout(() => {
-          if (
-            audioBufferRef.current.length > 0 &&
-            !hassentImmediateRef.current
-          ) {
-            hassentImmediateRef.current = true;
-            console.log(
-              `[AUDIO] PHASE 1: Immediate send ${audioBufferRef.current.length} chunks (first words)`,
-            );
-            sendAllAudioToAvatar();
-          }
-        }, IMMEDIATE_SEND_DELAY);
-        return;
-      }
-
-      // Phase 2: For remaining chunks, use gap detection
+      // Start gap detection as fallback (800ms threshold)
       if (!gapCheckIntervalRef.current) {
         startGapDetection();
       }
@@ -586,19 +523,13 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       sendAllAudioToAvatar();
     },
     onInterruption: () => {
-      // User interrupted - NOW we clear the buffer (old response audio)
-      // This is the right moment because OpenAI confirms the interruption via VAD
-      console.log("[AUDIO] Interruption confirmed - clearing old buffer");
+      // User interrupted - clear the buffer (old response audio)
+      console.log("[AUDIO] Interruption confirmed - clearing buffer");
       if (gapCheckIntervalRef.current) {
         clearInterval(gapCheckIntervalRef.current);
         gapCheckIntervalRef.current = null;
       }
-      if (immediateSendTimeoutRef.current) {
-        clearTimeout(immediateSendTimeoutRef.current);
-        immediateSendTimeoutRef.current = null;
-      }
       audioBufferRef.current = [];
-      hassentImmediateRef.current = false; // Reset for next response
     },
     onUserTranscript: (text) => {
       console.log("[AUDIO] User said:", text);
@@ -610,19 +541,13 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
         return;
       }
 
-      // Clear buffer immediately when user speaks - prevents old audio mixing with new response
-      // This is a backup in case the VAD interruption event is delayed
+      // Clear buffer when user speaks - prevents old audio mixing with new response
       if (gapCheckIntervalRef.current) {
         clearInterval(gapCheckIntervalRef.current);
         gapCheckIntervalRef.current = null;
       }
-      if (immediateSendTimeoutRef.current) {
-        clearTimeout(immediateSendTimeoutRef.current);
-        immediateSendTimeoutRef.current = null;
-      }
       audioBufferRef.current = [];
       totalChunksReceivedRef.current = 0;
-      hassentImmediateRef.current = false; // Reset for next response
       console.log("[AUDIO] Buffer cleared (user started speaking)");
 
       // Interrupt the avatar if it's currently speaking

@@ -394,13 +394,11 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
   const totalChunksReceivedRef = useRef(0);
   const lastChunkTimeRef = useRef<number>(0);
   const gapCheckIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const isStreamingRef = useRef(false); // Track if we've started streaming to HeyGen
 
-  // STREAMING STRATEGY: Small prebuffer + immediate streaming
-  // - Prebuffer: Wait for first N chunks to ensure smooth start
-  // - After prebuffer: Send each chunk immediately as it arrives
-  // - This reduces latency from ~3s to ~500ms while avoiding choppy start
-  const PREBUFFER_CHUNKS = 3; // Wait for 3 chunks before starting playback
+  // CHUNKING STRATEGY: Group chunks before sending to HeyGen
+  // Based on OpenAI Realtime best practices and logs (~10KB/chunk)
+  // 8 chunks ≈ 80KB = optimal size for HeyGen lip-sync
+  const CHUNK_GROUP_SIZE = 8; // Agrupar 8 chunks antes de enviar
   const CHUNK_GAP_THRESHOLD = 500; // ms gap = flush remaining buffer
 
   // Concatenate base64 audio chunks into a single base64 string
@@ -440,21 +438,7 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
     return btoa(binary);
   }, []);
 
-  // Send a single audio chunk to avatar (for streaming)
-  const sendAudioChunk = useCallback(
-    (audioBase64: string) => {
-      if (!audioBase64 || !sessionRef.current) return;
-
-      try {
-        sessionRef.current.repeatAudio(audioBase64);
-      } catch (error) {
-        console.error("Error sending audio chunk to avatar:", error);
-      }
-    },
-    [sessionRef],
-  );
-
-  // Send multiple chunks concatenated (for prebuffer or flush)
+  // Send multiple chunks concatenated
   const sendAudioChunks = useCallback(
     (chunks: string[]) => {
       if (chunks.length === 0 || !sessionRef.current) return;
@@ -492,9 +476,6 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
 
     console.log(`[AUDIO] Flushing ${chunks.length} remaining chunks`);
     sendAudioChunks(chunks);
-
-    // Reset streaming state for next response
-    isStreamingRef.current = false;
   }, [sendAudioChunks]);
 
   // Start gap detection - checks if stream ended by detecting pause between chunks
@@ -536,35 +517,18 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
     onAudioData: (audioBase64) => {
       totalChunksReceivedRef.current++;
       lastChunkTimeRef.current = Date.now();
+      audioBufferRef.current.push(audioBase64);
 
-      // STREAMING STRATEGY with adaptive prebuffer:
-      // Phase 1 (Prebuffer): Accumulate first N chunks for smooth start
-      // Phase 2 (Streaming): Send each chunk immediately as it arrives
-
-      if (!isStreamingRef.current) {
-        // Phase 1: Prebuffer - accumulate chunks until we have enough
-        audioBufferRef.current.push(audioBase64);
-
-        if (audioBufferRef.current.length >= PREBUFFER_CHUNKS) {
-          // Prebuffer complete - send all buffered chunks and start streaming
-          console.log(
-            `[AUDIO] Prebuffer complete (${PREBUFFER_CHUNKS} chunks) - starting stream`,
-          );
-          const prebufferChunks = audioBufferRef.current;
-          audioBufferRef.current = [];
-          isStreamingRef.current = true;
-          sendAudioChunks(prebufferChunks);
-        } else {
-          console.log(
-            `[AUDIO] Prebuffering chunk #${totalChunksReceivedRef.current} (${audioBufferRef.current.length}/${PREBUFFER_CHUNKS})`,
-          );
-        }
+      // CHUNKING STRATEGY: Send when we have enough chunks
+      // This balances latency (~400ms for 8 chunks) with audio continuity
+      if (audioBufferRef.current.length >= CHUNK_GROUP_SIZE) {
+        const chunksToSend = audioBufferRef.current.splice(0, CHUNK_GROUP_SIZE);
+        console.log(`[AUDIO] Sending group: ${chunksToSend.length} chunks`);
+        sendAudioChunks(chunksToSend);
       } else {
-        // Phase 2: Streaming - send chunk immediately
         console.log(
-          `[AUDIO] Streaming chunk #${totalChunksReceivedRef.current}`,
+          `[AUDIO] Buffering chunk #${totalChunksReceivedRef.current} (${audioBufferRef.current.length}/${CHUNK_GROUP_SIZE})`,
         );
-        sendAudioChunk(audioBase64);
       }
 
       // Start gap detection as fallback to flush any remaining buffer
@@ -578,14 +542,13 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       flushAudioBuffer();
     },
     onInterruption: () => {
-      // User interrupted - clear the buffer and reset streaming state
-      console.log("[AUDIO] Interruption - clearing buffer and resetting");
+      // User interrupted - clear the buffer
+      console.log("[AUDIO] Interruption - clearing buffer");
       if (gapCheckIntervalRef.current) {
         clearInterval(gapCheckIntervalRef.current);
         gapCheckIntervalRef.current = null;
       }
       audioBufferRef.current = [];
-      isStreamingRef.current = false;
     },
     onUserTranscript: (text) => {
       console.log("[AUDIO] User said:", text);
@@ -597,15 +560,14 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
         return;
       }
 
-      // Clear buffer and reset streaming state when user speaks
+      // Clear buffer when user speaks
       if (gapCheckIntervalRef.current) {
         clearInterval(gapCheckIntervalRef.current);
         gapCheckIntervalRef.current = null;
       }
       audioBufferRef.current = [];
       totalChunksReceivedRef.current = 0;
-      isStreamingRef.current = false;
-      console.log("[AUDIO] Buffer cleared, streaming reset (user speaking)");
+      console.log("[AUDIO] Buffer cleared (user speaking)");
 
       // Interrupt the avatar if it's currently speaking
       if (sessionRef.current) {

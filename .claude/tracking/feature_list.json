@@ -74,15 +74,17 @@
     },
     {
       "id": "openai-realtime-integration",
-      "name": "OpenAI Realtime Voice Agent",
-      "description": "Replace ElevenLabs with OpenAI Realtime API (GPT-4o-mini) for 6x cost reduction",
-      "priority": "HIGH",
+      "name": "OpenAI Realtime Voice Agent (Alternative)",
+      "description": "ALTERNATIVE to ElevenLabs Voice Agents - OpenAI Realtime API option for different use cases",
+      "priority": "MEDIUM",
       "status": "completed",
       "passes": true,
+      "isAlternative": true,
+      "primaryOption": "core-voice-agent (ElevenLabs)",
+      "note": "ElevenLabs remains PRIMARY due to better pricing and modularity. OpenAI Realtime is an optional alternative.",
       "branch": "claude/integrate-openai-voice-agent-h7m2K",
       "startedDate": "2025-12-23",
       "completedDate": "2025-12-24",
-      "estimatedCostSavings": "83%",
       "solution": {
         "strategy": "Chunking Agrupado",
         "CHUNK_GROUP_SIZE": 8,
@@ -99,9 +101,9 @@
         "End-to-end testing ✓"
       ],
       "nextSteps": [
-        "PR to develop",
+        "PR to develop (as alternative option)",
         "Testing in preview",
-        "PR to master (production)"
+        "Add toggle/config to switch between ElevenLabs and OpenAI"
       ]
     }
   ],

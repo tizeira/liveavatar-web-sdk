@@ -1,5 +1,31 @@
 # Clara Voice Agent - Session Progress
 
+## Architecture: Voice Agent Options
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     CLARA VOICE AGENT                                │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  OPTION 1: ElevenLabs Voice Agents (PRIMARY - RECOMMENDED)          │
+│  ─────────────────────────────────────────────────────────          │
+│  • Better pricing and modularity                                     │
+│  • Production-ready in master/develop branches                       │
+│  • Hook: useElevenLabsAgent.ts                                       │
+│  • Audio: 16kHz → resample → 24kHz for HeyGen                        │
+│                                                                      │
+│  OPTION 2: OpenAI Realtime (ALTERNATIVE)                            │
+│  ─────────────────────────────────────────                          │
+│  • Branch: claude/integrate-openai-voice-agent-h7m2K                │
+│  • Hook: useOpenAIRealtimeAgent.ts                                   │
+│  • Audio: 24kHz direct to HeyGen (no resample needed)               │
+│  • Uses "Chunking Agrupado" strategy (8 chunks ≈ 80KB)              │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
 ## Session: 2025-12-24 - OpenAI Realtime Audio Fix (SOLVED)
 
 ### Problem Solved
@@ -95,6 +121,12 @@ HeyGen SDK internamente divide en chunks de 20ms para lip-sync
 2. **Agents SDK no sirve** porque abstrae el audio y no lo expone
 3. **HeyGen acepta PCM16 24kHz base64** - el SDK divide internamente en 20ms chunks
 4. **El tamaño de chunk importa** - muy pequeño = choppy, muy grande = latencia
+
+### Important Note
+**OpenAI Realtime es una ALTERNATIVA a ElevenLabs Voice Agents, NO un reemplazo.**
+- ElevenLabs = OPCIÓN PRIMARIA (mejor precio y modularidad)
+- OpenAI Realtime = ALTERNATIVA (disponible en branch separado)
+- Ambas opciones deben coexistir en el proyecto
 
 ---
 

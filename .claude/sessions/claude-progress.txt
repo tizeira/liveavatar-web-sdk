@@ -1,5 +1,103 @@
 # Clara Voice Agent - Session Progress
 
+## Session: 2025-12-24 - OpenAI Realtime Audio Fix (SOLVED)
+
+### Problem Solved
+**Audio Choppy/Cortado** - Las respuestas de OpenAI Realtime se escuchaban cortadas al inicio, medio o final.
+
+### Root Cause
+HeyGen `repeatAudio()` no puede procesar chunks de audio muy pequeños (~10KB). Necesita bloques de tamaño suficiente (~80KB) para hacer lip-sync correctamente.
+
+### Solution Implemented: Chunking Agrupado
+```typescript
+// ClaraVoiceAgent.tsx
+const CHUNK_GROUP_SIZE = 8;  // Agrupar 8 chunks (~80KB) antes de enviar
+const CHUNK_GAP_THRESHOLD = 500;  // Fallback flush en ms
+
+onAudioData: (audioBase64) => {
+  audioBufferRef.current.push(audioBase64);
+
+  if (audioBufferRef.current.length >= CHUNK_GROUP_SIZE) {
+    const chunksToSend = audioBufferRef.current.splice(0, CHUNK_GROUP_SIZE);
+    sendAudioChunks(chunksToSend);  // Concatena y envía ~80KB
+  }
+}
+```
+
+### Strategies Tested (Historical)
+| Strategy | Result | Latency | Issue |
+|----------|--------|---------|-------|
+| Two-Phase (80ms + 250ms gap) | ❌ | ~80ms | Audio choppy por fragmentación |
+| Accumulate Until Done | ❌ | ~3000ms | Latencia inaceptable |
+| Streaming + Prebuffer (3 chunks) | ❌ | ~150ms | Chunks muy pequeños, se corta |
+| **Chunking Agrupado (8 chunks)** | ✅ | ~400ms | **FUNCIONA** |
+
+### Files Modified
+- `apps/demo/src/components/ClaraVoiceAgent.tsx`
+  - Líneas 398-402: Nueva constante `CHUNK_GROUP_SIZE = 8`
+  - Líneas 534-554: Nuevo callback `onAudioData` con chunking
+  - Eliminado: `isStreamingRef`, `sendAudioChunk`, lógica Two-Phase
+
+### Commits
+```
+00e8511 fix: implement chunking strategy for audio streaming  ← FINAL (WORKS)
+918205c feat: implement streaming with adaptive prebuffer
+a321dc0 fix: replace Two-Phase audio strategy with Accumulate
+c5032fb fix: add wss://api.openai.com to CSP
+edb0f2b feat: integrate OpenAI Realtime API voice agent
+```
+
+### Branch
+- `claude/integrate-openai-voice-agent-h7m2K` (pushed, ready for PR)
+
+### How to Continue Development on This Branch
+```bash
+git checkout claude/integrate-openai-voice-agent-h7m2K
+git pull origin claude/integrate-openai-voice-agent-h7m2K
+
+# Editar ClaraVoiceAgent.tsx para ajustar:
+# - CHUNK_GROUP_SIZE (6-10 según testing)
+# - CHUNK_GAP_THRESHOLD (500-800ms)
+
+pnpm build && git commit -m "fix: adjust chunking params"
+git push
+```
+
+### Architecture Summary
+```
+OpenAI Realtime WebSocket
+      │
+      ▼
+response.audio.delta (chunks ~10KB, PCM16 24kHz base64)
+      │
+      ▼
+┌─────────────────────────────────┐
+│  Audio Buffer (audioBufferRef)  │
+│  Acumula hasta 8 chunks         │
+└─────────────────────────────────┘
+      │
+      ├─► buffer >= 8 → concatenar → HeyGen.repeatAudio(~80KB)
+      │
+      ├─► onAgentResponseEnd → flush restantes
+      │
+      └─► Gap > 500ms → flush fallback
+
+HeyGen SDK internamente divide en chunks de 20ms para lip-sync
+```
+
+### Next Steps
+- [ ] Crear PR: `claude/integrate-openai-voice-agent-h7m2K` → `develop`
+- [ ] Testing en preview de develop
+- [ ] PR: `develop` → `master` (producción)
+
+### Key Learnings
+1. **WebSocket es necesario** (no WebRTC) porque necesitamos interceptar audio para HeyGen
+2. **Agents SDK no sirve** porque abstrae el audio y no lo expone
+3. **HeyGen acepta PCM16 24kHz base64** - el SDK divide internamente en 20ms chunks
+4. **El tamaño de chunk importa** - muy pequeño = choppy, muy grande = latencia
+
+---
+
 ## Session: 2025-12-23 - OpenAI Realtime Integration
 
 ### Completed

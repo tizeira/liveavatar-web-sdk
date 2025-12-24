@@ -26,7 +26,7 @@ const nextConfig = {
               "style-src 'self' 'unsafe-inline'",
               "img-src 'self' data: blob: https://*.heygen.com https://*.liveavatar.com https://*.livekit.cloud",
               "media-src 'self' blob: https://*.heygen.com https://*.liveavatar.com wss://*.livekit.cloud",
-              "connect-src 'self' https://*.heygen.com https://*.liveavatar.com https://api.elevenlabs.io wss://*.elevenlabs.io https://api.openai.com https://*.livekit.cloud wss://*.livekit.cloud wss://*.heygen.io https://*.heygen.io",
+              "connect-src 'self' https://*.heygen.com https://*.liveavatar.com https://api.elevenlabs.io wss://*.elevenlabs.io https://api.openai.com wss://api.openai.com https://*.livekit.cloud wss://*.livekit.cloud wss://*.heygen.io https://*.heygen.io",
               "frame-ancestors 'self' https://*.myshopify.com https://*.shopify.com https://admin.shopify.com http://localhost:*",
               "worker-src 'self' blob:",
             ].join("; "),

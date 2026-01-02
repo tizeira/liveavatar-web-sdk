@@ -113,6 +113,16 @@ const MOBILE_CONFIG: AudioConfig = {
 };
 
 // ============================================
+// GREETING AUDIO STRATEGY
+// ============================================
+// Skip PHASE 1 (immediate send) for the initial greeting to avoid fragmentation.
+// The greeting is long (~10-12s) and sending the first chunk immediately causes
+// micro-cuts as HeyGen renders each segment separately.
+// When true: greeting accumulates before first send (smoother playback)
+// When false: greeting uses PHASE 1 like normal responses (faster start, may cut)
+const GREETING_SKIP_PHASE1 = true;
+
+// ============================================
 // SAFARI iOS DETECTION
 // ============================================
 const isSafariIOS = (): boolean => {
@@ -903,9 +913,17 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       );
 
       // TWO-PHASE STRATEGY:
-      // Phase 1: Send first chunk IMMEDIATELY (contains first words - reduces perceived latency)
-      // This is SYNCHRONOUS - no timeout, no delay, just send NOW
-      if (!hassentImmediateRef.current && currentBufferLength === 1) {
+      // GREETING: Skip PHASE 1 to avoid fragmentation
+      // isFirstAudioRef is true only for the initial greeting
+      if (isFirstAudioRef.current && GREETING_SKIP_PHASE1) {
+        if (currentBufferLength === 1) {
+          console.log(
+            `[AUDIO] GREETING: Skipping PHASE 1 - will accumulate before sending`,
+          );
+        }
+        // Don't return - fall through to buffer limit / gap detection
+      } else if (!hassentImmediateRef.current && currentBufferLength === 1) {
+        // Normal responses: PHASE 1 immediate (unchanged)
         hassentImmediateRef.current = true;
         console.log(
           `[AUDIO] PHASE 1: IMMEDIATE send first chunk (first words) - NO DELAY`,

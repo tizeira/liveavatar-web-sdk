@@ -937,7 +937,18 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       // Mobile CPUs struggle with large resamples - process in smaller batches
       // Uses runtime audioConfig.maxBufferSamples for device-specific limits
       const currentSamples = calculateBufferSamples(audioBufferRef.current);
-      if (currentSamples >= audioConfig.maxBufferSamples) {
+
+      // GREETING: Skip buffer limit to avoid fragmentation
+      // The greeting should be sent as ONE piece via gap detection or onAgentResponseEnd
+      if (isFirstAudioRef.current && GREETING_SKIP_PHASE1) {
+        // Log only once per greeting (when we first exceed the limit)
+        if (currentSamples >= audioConfig.maxBufferSamples) {
+          console.log(
+            `[AUDIO] GREETING: Skipping buffer limit (${currentSamples} samples) - accumulating for single send`,
+          );
+        }
+        // Don't return - continue to gap detection setup below
+      } else if (currentSamples >= audioConfig.maxBufferSamples) {
         console.log(
           `[AUDIO] BUFFER LIMIT: ${currentSamples} samples >= ${audioConfig.maxBufferSamples}, processing NOW`,
         );
@@ -961,8 +972,10 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       sendAllAudioToAvatar();
     },
     onAgentResponse: () => {
-      // Agent started responding - just log for debugging
+      // Agent started responding - reset interrupt debounce
+      // Any chunks arriving now are from the NEW response, not ghosts
       console.log("[AUDIO] agent_response received - new response starting");
+      lastInterruptTimeRef.current = 0; // Reset debounce to accept new audio
     },
     onInterruption: () => {
       // ElevenLabs confirmed user actually interrupted the agent

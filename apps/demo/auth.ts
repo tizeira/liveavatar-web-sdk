@@ -72,6 +72,7 @@ const providers: Provider[] = [
 
 const nextAuth = NextAuth({
   providers,
+  trustHost: true, // CRITICAL: Required for Vercel Preview (dynamic URLs)
   session: {
     strategy: "jwt",
     maxAge: 30 * 24 * 60 * 60, // 30 days
@@ -79,8 +80,6 @@ const nextAuth = NextAuth({
   pages: {
     signIn: "/login",
   },
-  // Trust Vercel proxy headers for dynamic URLs in Preview deployments
-  trustHost: true,
   callbacks: {
     // Add user.id to JWT token during sign-in
     jwt({ token, user }) {

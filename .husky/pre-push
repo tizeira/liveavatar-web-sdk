@@ -1,0 +1,21 @@
+#!/usr/bin/env sh
+
+# Protect against accidental pushes to upstream (not our repo)
+remote="$1"
+url="$2"
+
+if echo "$url" | grep -q "heygen-com"; then
+  echo "🚫 BLOCKED: Cannot push to upstream (heygen-com) repository!"
+  echo "   Use 'origin' (tizeira) instead."
+  echo ""
+  echo "   To push to your fork:"
+  echo "   git push origin <branch>"
+  exit 1
+fi
+
+# Also block if remote name is 'upstream'
+if [ "$remote" = "upstream" ]; then
+  echo "🚫 BLOCKED: Cannot push to 'upstream' remote!"
+  echo "   Use 'origin' (your fork) instead."
+  exit 1
+fi

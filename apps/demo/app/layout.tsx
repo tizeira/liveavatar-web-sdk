@@ -1,7 +1,7 @@
 import "./globals.css";
 import type { Metadata, Viewport } from "next";
 import { SessionProvider } from "../src/components/providers/SessionProvider";
-import { ErudaLoader } from "../src/components/debug/ErudaLoader";
+import { Toaster } from "sonner";
 
 export const metadata: Metadata = {
   title: "Clara - Tu Asesora de Skincare | Beta Skin Tech",
@@ -25,8 +25,8 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="min-h-screen antialiased">
-        <ErudaLoader />
         <SessionProvider>{children}</SessionProvider>
+        <Toaster position="top-center" richColors />
       </body>
     </html>
   );

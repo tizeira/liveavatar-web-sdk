@@ -5,8 +5,48 @@ export default auth((req) => {
   const { pathname, searchParams } = req.nextUrl;
   const session = req.auth;
 
-  // Allow login page and auth API routes
-  if (pathname.startsWith("/login") || pathname.startsWith("/api/auth")) {
+  // ============================================
+  // MAINTENANCE MODE CHECK (highest priority)
+  // ============================================
+  const isMaintenanceMode = process.env.MAINTENANCE_MODE === "true";
+
+  // CRITICAL: /login and /api/auth must be exempt from maintenance mode
+  // to prevent infinite redirect loop:
+  // 1. User visits / → redirects to /maintenance (MAINTENANCE_MODE=true)
+  // 2. /maintenance requires auth → redirects to /login
+  // 3. /login not exempt → redirects to /maintenance
+  // 4. LOOP ♾️
+  const maintenanceExemptPaths = [
+    "/maintenance",
+    "/login", // Prevents loop (user can access login page)
+    "/api/auth", // Prevents loop (NextAuth callbacks work)
+    "/api/health",
+    "/_next",
+    "/favicon.ico",
+  ];
+  const isExempt = maintenanceExemptPaths.some((path) =>
+    pathname.startsWith(path),
+  );
+
+  if (isMaintenanceMode && !isExempt) {
+    return NextResponse.redirect(new URL("/maintenance", req.url));
+  }
+
+  // If NOT in maintenance but trying to access /maintenance, redirect to home
+  if (pathname === "/maintenance" && !isMaintenanceMode) {
+    return NextResponse.redirect(new URL("/", req.url));
+  }
+
+  // ============================================
+  // AUTH CHECK (existing logic)
+  // ============================================
+
+  // Allow public pages (login, maintenance, auth)
+  if (
+    pathname.startsWith("/login") ||
+    pathname.startsWith("/api/auth") ||
+    pathname.startsWith("/maintenance")
+  ) {
     // If already logged in and trying to access login, redirect to home
     if (pathname === "/login" && session) {
       return NextResponse.redirect(new URL("/", req.url));

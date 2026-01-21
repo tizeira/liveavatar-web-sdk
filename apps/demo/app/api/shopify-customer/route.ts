@@ -22,8 +22,38 @@ import type {
   ShopifyCustomerRequest,
   ShopifyCustomerResponse,
 } from "@/src/shopify";
+import { rateLimitByEndpoint } from "@/src/lib/rate-limit";
+import { getCachedCustomer, cacheCustomer } from "@/src/lib/db/queries";
+import { prisma } from "@/src/lib/db/prisma";
 
 export async function POST(request: NextRequest) {
+  // === RATE LIMIT CHECK ===
+  const limitResult = await rateLimitByEndpoint(request, "shopify-customer");
+
+  if (!limitResult.success) {
+    return NextResponse.json(
+      {
+        valid: false,
+        hasOrders: false,
+        customer: null,
+        error: "Too many requests",
+        message: "Demasiados intentos. Espera un momento antes de reintentar.",
+        retryAfter: Math.ceil((limitResult.reset - Date.now()) / 1000),
+      },
+      {
+        status: 429,
+        headers: {
+          "X-RateLimit-Limit": limitResult.limit.toString(),
+          "X-RateLimit-Remaining": limitResult.remaining.toString(),
+          "X-RateLimit-Reset": new Date(limitResult.reset).toISOString(),
+          "Retry-After": Math.ceil(
+            (limitResult.reset - Date.now()) / 1000,
+          ).toString(),
+        },
+      },
+    );
+  }
+
   try {
     // Check if HMAC secret is configured
     if (!isHmacConfigured()) {
@@ -49,6 +79,34 @@ export async function POST(request: NextRequest) {
       email,
       orders_count,
     } = body;
+
+    // === DATABASE CACHE CHECK ===
+    // Try to get cached customer data to avoid HMAC validation + processing
+    if (email) {
+      try {
+        const cached = await getCachedCustomer(email);
+        if (cached) {
+          console.log("[CACHE HIT] Returning cached customer data for:", email);
+          return NextResponse.json({
+            valid: true,
+            hasOrders: (cached.ordersCount || 0) > 0,
+            customer: {
+              id: cached.shopifyId || customer_id,
+              email: cached.shopifyEmail,
+              firstName: cached.firstName,
+              lastName: cached.lastName,
+              ordersCount: cached.ordersCount || 0,
+              skinType: cached.skinType,
+              skinConcerns: cached.skinConcerns,
+            },
+          });
+        }
+        console.log("[CACHE MISS] No cache found for:", email);
+      } catch (cacheError) {
+        // Cache read failed - continue with normal flow
+        console.error("[CACHE ERROR]", cacheError);
+      }
+    }
 
     // 1. Validate required fields
     if (!customer_id || !shopify_token) {
@@ -80,6 +138,35 @@ export async function POST(request: NextRequest) {
     // 3. Verify HMAC token (timing-safe)
     if (!verifyCustomerToken(shopify_token, cleanId)) {
       console.warn(`Invalid HMAC token for customer ${cleanId}`);
+
+      // Log invalid token attempt
+      try {
+        const customerFullName =
+          [first_name, last_name].filter(Boolean).join(" ") || null;
+
+        await prisma.session.create({
+          data: {
+            sessionToken: `shopify_invalid_${cleanId}_${Date.now()}`,
+            deviceType: request.headers.get("user-agent")?.includes("Mobile")
+              ? "mobile"
+              : "desktop",
+            status: "error",
+            shopifyEmail: email || null,
+            shopifyCustomerId: cleanId,
+            customerName: customerFullName,
+            ordersCount: orders_count ? parseInt(orders_count, 10) : null,
+            accessGranted: false,
+            verificationStatus: "invalid_token",
+          },
+        });
+        console.log(
+          "[SESSION TRACKING] Logged invalid token attempt for:",
+          cleanId,
+        );
+      } catch (trackingError) {
+        console.error("[SESSION TRACKING ERROR]", trackingError);
+      }
+
       return NextResponse.json(
         {
           valid: false,
@@ -109,6 +196,54 @@ export async function POST(request: NextRequest) {
         // Can be added to the iframe URL later if needed
       },
     };
+
+    // === DATABASE CACHE WRITE ===
+    // Cache validated customer data (24 hour TTL)
+    if (email) {
+      try {
+        await cacheCustomer({
+          shopifyEmail: email,
+          shopifyId: cleanId,
+          firstName: first_name || undefined,
+          lastName: last_name || undefined,
+          ordersCount: ordersCountNum,
+        });
+        console.log("[CACHE WRITE] Cached customer data for:", email);
+      } catch (cacheError) {
+        // Cache write failed - don't fail the request
+        console.error("[CACHE WRITE ERROR]", cacheError);
+      }
+    }
+
+    // === SESSION TRACKING ===
+    // Log verification attempt for analytics
+    try {
+      const customerFullName =
+        [first_name, last_name].filter(Boolean).join(" ") || null;
+
+      await prisma.session.create({
+        data: {
+          sessionToken: `shopify_${cleanId}_${Date.now()}`,
+          deviceType: request.headers.get("user-agent")?.includes("Mobile")
+            ? "mobile"
+            : "desktop",
+          status: hasOrders ? "active" : "error",
+          shopifyEmail: email || null,
+          shopifyCustomerId: cleanId,
+          customerName: customerFullName,
+          ordersCount: ordersCountNum,
+          accessGranted: hasOrders,
+          verificationStatus: hasOrders ? "verified" : "no_orders",
+        },
+      });
+      console.log(
+        "[SESSION TRACKING] Logged verification for customer:",
+        cleanId,
+      );
+    } catch (trackingError) {
+      // Tracking failed - don't fail the request
+      console.error("[SESSION TRACKING ERROR]", trackingError);
+    }
 
     return NextResponse.json(response);
   } catch (error) {

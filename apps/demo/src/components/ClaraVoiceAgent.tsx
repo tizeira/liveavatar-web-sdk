@@ -42,6 +42,9 @@ import {
 // Debug tools
 import { MobileLogger } from "./debug/MobileLogger";
 
+// Toast notifications
+import { toast } from "sonner";
+
 // ============================================
 // DEVICE DETECTION (runtime, not module-level)
 // ============================================
@@ -104,7 +107,7 @@ const DESKTOP_CONFIG: AudioConfig = {
 
 const MOBILE_CONFIG: AudioConfig = {
   gapThreshold: 150, // More sensitive for burst delivery
-  maxBufferSamples: 24000, // 1.5s @ 16kHz - smaller batches for slow CPU
+  maxBufferSamples: 48000, // 3s @ 16kHz - prevents premature buffer limit
   phase1LeadingSilence: 100, // More time for HeyGen to wake up on mobile
   phase1TrailingSilence: 0,
   phase2LeadingSilence: 80,
@@ -112,15 +115,32 @@ const MOBILE_CONFIG: AudioConfig = {
   immediateFirstChunk: true, // Still send immediately, but with more silence
 };
 
-// ============================================
-// GREETING AUDIO STRATEGY
-// ============================================
-// Skip PHASE 1 (immediate send) for the initial greeting to avoid fragmentation.
-// The greeting is long (~10-12s) and sending the first chunk immediately causes
-// micro-cuts as HeyGen renders each segment separately.
-// When true: greeting accumulates before first send (smoother playback)
-// When false: greeting uses PHASE 1 like normal responses (faster start, may cut)
+// GREETING FIX: Skip immediate send for greeting to accumulate more audio
+// This prevents fragmentation of the greeting message on mobile devices
 const GREETING_SKIP_PHASE1 = true;
+
+/**
+ * Get minimum samples required for PHASE 1 immediate send.
+ *
+ * CRITICAL CONSTRAINT: Must be LESS than maxBufferSamples to avoid
+ * truncation from BUFFER LIMIT override.
+ *
+ * Desktop: 48000 samples (3.0s @ 16kHz)
+ *   - maxBufferSamples: 64000 (4.0s)
+ *   - Safety margin: 16000 samples (1.0s)
+ *   - Rationale: Works perfectly, no changes needed
+ *
+ * Mobile: 36000 samples (2.25s @ 16kHz)
+ *   - maxBufferSamples: 48000 (3.0s)
+ *   - Safety margin: 12000 samples (0.75s)
+ *   - Rationale: Ensures complete thoughts, prevents BUFFER LIMIT override
+ *
+ * @param isMobile - Whether device is mobile (phone/tablet)
+ * @returns Minimum samples threshold for PHASE 1
+ */
+const getMinPhase1Samples = (isMobile: boolean): number => {
+  return isMobile ? 36000 : 48000; // Mobile: 2.25s, Desktop: 3s
+};
 
 // ============================================
 // SAFARI iOS DETECTION
@@ -226,56 +246,56 @@ const StatusIndicator: React.FC<StatusIndicatorProps> = ({
 
     if (isMuted) {
       return (
-        <Badge className="status-badge bg-red-500/90 text-white border border-red-400/30 hover:bg-red-500/90">
+        <Badge className="status-badge glass-morphism-strong bg-red-500/90 text-gray-900 border-red-400/40 hover:bg-red-500 shadow-lg">
           <MicOff className="w-3 h-3 mr-1" />
-          <span>Silenciado</span>
+          <span className="font-medium">Silenciado</span>
         </Badge>
       );
     }
 
     if (isListening) {
       return (
-        <Badge className="status-badge status-badge-success status-pulse hover:bg-green-500/90">
-          <div className="voice-wave text-white mr-1">
+        <Badge className="status-badge glass-morphism-strong bg-emerald-500/90 text-gray-900 border-emerald-400/40 status-pulse hover:bg-emerald-500 shadow-lg">
+          <div className="voice-wave text-gray-900 mr-1">
             <span></span>
             <span></span>
             <span></span>
             <span></span>
           </div>
-          <span>Escuchando</span>
+          <span className="font-medium">Escuchando</span>
         </Badge>
       );
     }
 
     if (isThinking) {
       return (
-        <Badge className="status-badge status-badge-warning hover:bg-amber-500/90">
+        <Badge className="status-badge glass-morphism-strong bg-amber-500/90 text-gray-900 border-amber-400/40 hover:bg-amber-500 shadow-lg">
           <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-          <span>Pensando</span>
+          <span className="font-medium">Pensando</span>
         </Badge>
       );
     }
 
     if (isSpeaking) {
       return (
-        <Badge className="status-badge status-badge-info hover:bg-blue-500/90">
-          <div className="voice-wave text-white mr-1">
+        <Badge className="status-badge glass-morphism-strong bg-blue-500/90 text-gray-900 border-blue-400/40 hover:bg-blue-500 shadow-lg">
+          <div className="voice-wave text-gray-900 mr-1">
             <span></span>
             <span></span>
             <span></span>
             <span></span>
           </div>
-          <span>Respondiendo</span>
+          <span className="font-medium">Respondiendo</span>
         </Badge>
       );
     }
 
     return (
-      <Badge className="status-badge status-badge-neutral hover:bg-white/30">
+      <Badge className="status-badge badge-ios hover:bg-white/40 shadow-md">
         <div
           className={`connection-dot ${connectionQuality === ConnectionQuality.GOOD ? "good" : connectionQuality === ConnectionQuality.BAD ? "bad" : "unknown"} dot-pulse mr-1`}
         />
-        <span>Conectado</span>
+        <span className="font-medium text-neutral-700">Conectado</span>
       </Badge>
     );
   };
@@ -304,7 +324,11 @@ const VoiceControls: React.FC<VoiceControlsProps> = ({
       onClick={onToggleMute}
       variant="ghost"
       size="icon"
-      className={`floating-glass rounded-full w-12 h-12 ${isMuted ? "bg-red-500/80 hover:bg-red-500 text-white" : "bg-slate-800/80 hover:bg-slate-800 text-white"}`}
+      className={`floating-glass rounded-full w-12 h-12 transition-all duration-300 ${
+        isMuted
+          ? "bg-red-500/90 hover:bg-red-500 text-gray-900 border-red-400/40 shadow-xl"
+          : "glass-morphism-dark text-gray-900 border-white/20 shadow-lg"
+      }`}
       title={isMuted ? "Activar micrófono" : "Silenciar"}
     >
       {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
@@ -320,6 +344,8 @@ interface LandingScreenProps {
   isLoading: boolean;
   userName?: string | null;
   customerData?: CustomerData | null;
+  isRateLimited?: boolean;
+  rateLimitCountdown?: number;
 }
 
 const LandingScreen: React.FC<LandingScreenProps> = ({
@@ -327,16 +353,18 @@ const LandingScreen: React.FC<LandingScreenProps> = ({
   isLoading,
   userName,
   customerData,
+  isRateLimited = false,
+  rateLimitCountdown = 0,
 }) => {
   const displayName = customerData?.firstName || userName;
 
   return (
     <div className="flex-1 w-full flex flex-col items-center justify-center p-6 landing-gradient min-h-screen">
-      <Card className="max-w-sm w-full glass-morphism border-0 shadow-2xl">
+      <Card className="max-w-sm w-full card-ios border-0 shadow-2xl relative z-10">
         <CardHeader className="text-center pb-2">
           {/* Clara Avatar */}
           <div className="avatar-ring-ios mx-auto mb-4">
-            <div className="h-20 w-20 rounded-full bg-gradient-to-br from-neutral-100 to-neutral-200 flex items-center justify-center overflow-hidden p-3 border border-white/40">
+            <div className="h-20 w-20 rounded-full glass-morphism-strong flex items-center justify-center overflow-hidden p-3">
               <Image
                 src="/images/clara-logo.png"
                 alt="Clara Logo"
@@ -348,15 +376,18 @@ const LandingScreen: React.FC<LandingScreenProps> = ({
           </div>
 
           {/* Badge */}
-          <div className="badge-ios mx-auto mb-3 text-neutral-900">
-            <span className="w-2 h-2 bg-neutral-500 rounded-full animate-pulse" />
+          <div className="badge-ios mx-auto mb-3 text-neutral-800">
+            <span
+              className="w-2 h-2 rounded-full animate-pulse"
+              style={{ backgroundColor: "var(--platinum-600)" }}
+            />
             Clara Skin Care Assistant
           </div>
 
-          <CardTitle className="text-2xl text-slate-800">
+          <CardTitle className="text-2xl font-bold text-neutral-800">
             {displayName ? `Hola, ${displayName}!` : "Hola!"}
           </CardTitle>
-          <CardDescription className="text-base mt-2">
+          <CardDescription className="text-base mt-2 text-neutral-600">
             Soy Clara, tu asistente de belleza personal. Estoy aquí para
             ayudarte a encontrar los productos perfectos para ti.
           </CardDescription>
@@ -365,7 +396,7 @@ const LandingScreen: React.FC<LandingScreenProps> = ({
         <CardContent className="pt-4">
           <Button
             onClick={onStartCall}
-            disabled={isLoading}
+            disabled={isLoading || isRateLimited}
             size="lg"
             className="btn-ios-primary"
           >
@@ -373,6 +404,11 @@ const LandingScreen: React.FC<LandingScreenProps> = ({
               <>
                 <Loader2 className="w-5 h-5 mr-2 animate-spin" />
                 Conectando...
+              </>
+            ) : isRateLimited ? (
+              <>
+                <Clock className="w-5 h-5 mr-2" />
+                Espera {rateLimitCountdown}s
               </>
             ) : (
               <>
@@ -393,18 +429,23 @@ const LandingScreen: React.FC<LandingScreenProps> = ({
 const ConnectingScreen: React.FC = () => {
   return (
     <div className="flex-1 w-full flex flex-col items-center justify-center p-6 landing-gradient min-h-screen">
-      <Card className="max-w-sm w-full glass-morphism border-0 shadow-xl">
+      <Card className="max-w-sm w-full card-ios border-0 shadow-2xl relative z-10">
         <CardContent className="pt-8 pb-8 text-center">
           <div className="relative w-20 h-20 mx-auto mb-6">
-            <Skeleton className="w-20 h-20 rounded-full" />
+            <Skeleton className="w-20 h-20 rounded-full glass-morphism-subtle" />
             <div className="absolute inset-0 flex items-center justify-center">
-              <Loader2 className="w-8 h-8 text-indigo-500 animate-spin" />
+              <Loader2
+                className="w-8 h-8 animate-spin"
+                style={{ color: "var(--platinum-700)" }}
+              />
             </div>
           </div>
-          <h2 className="text-xl font-semibold text-slate-700 mb-2">
+          <h2 className="text-xl font-semibold text-neutral-800 mb-2">
             Conectando...
           </h2>
-          <p className="text-slate-500 text-sm">Preparando a Clara</p>
+          <p className="text-neutral-600 text-sm font-medium">
+            Preparando a Clara
+          </p>
         </CardContent>
       </Card>
     </div>
@@ -801,11 +842,11 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       if (isFirstAudio) {
         isFirstAudioRef.current = false;
         console.log(
-          `[AUDIO] First greeting: ${chunks.length} chunks, ${totalSizeKB}KB (resampled once)`,
+          `[AUDIO] GREETING SENT: ${chunks.length} chunks, ${totalSizeKB}KB, single repeatAudio() call`,
         );
       } else {
         console.log(
-          `[AUDIO] Response: ${chunks.length} chunks, ${totalSizeKB}KB (resampled once)`,
+          `[AUDIO] Response sent: ${chunks.length} chunks, ${totalSizeKB}KB`,
         );
       }
 
@@ -908,57 +949,72 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       lastChunkTimeRef.current = Date.now();
 
       const currentBufferLength = audioBufferRef.current.length;
+      const currentSamplesForLog = calculateBufferSamples(
+        audioBufferRef.current,
+      );
       console.log(
-        `[AUDIO] Chunk #${totalChunksReceivedRef.current} buffered (${currentBufferLength} total)`,
+        `[AUDIO] Chunk #${totalChunksReceivedRef.current}, buffer: ${currentSamplesForLog} samples (${currentBufferLength} chunks), isGreeting: ${isFirstAudioRef.current}`,
       );
 
       // TWO-PHASE STRATEGY:
-      // GREETING: Skip PHASE 1 to avoid fragmentation
-      // isFirstAudioRef is true only for the initial greeting
-      if (isFirstAudioRef.current && GREETING_SKIP_PHASE1) {
-        if (currentBufferLength === 1) {
-          console.log(
-            `[AUDIO] GREETING: Skipping PHASE 1 - will accumulate before sending`,
-          );
+      // Phase 1: Send first chunk IMMEDIATELY (contains first words - reduces perceived latency)
+      // This is SYNCHRONOUS - no timeout, no delay, just send NOW
+      // GREETING FIX: Skip PHASE 1 for greeting to accumulate more audio
+      if (!hassentImmediateRef.current && currentBufferLength === 1) {
+        if (isFirstAudioRef.current && GREETING_SKIP_PHASE1) {
+          console.log("[AUDIO] GREETING: Skipping PHASE 1 (immediate send)");
+          // Don't send yet - continue to gap detection or buffer limit
+        } else {
+          // TRUNCATION FIX: Check if first chunk has enough audio content
+          // Calculate samples from first chunk (base64 → bytes → samples)
+          const firstChunk = audioBufferRef.current[0]!;
+          const estimatedSamples = Math.round((firstChunk.length * 0.75) / 2);
+
+          // Device-aware threshold to prevent mobile truncation
+          const isMobile = isMobileDevice();
+          const minPhase1Samples = getMinPhase1Samples(isMobile);
+
+          if (estimatedSamples < minPhase1Samples) {
+            console.log(
+              `[AUDIO] PHASE 1 [${isMobile ? "MOBILE" : "DESKTOP"}]: First chunk too small (${estimatedSamples}/${minPhase1Samples} samples), waiting for more`,
+            );
+            // Don't send yet - let gap detection or buffer limit handle it
+            // Continue to PHASE 2 logic below
+          } else {
+            hassentImmediateRef.current = true;
+            console.log(
+              `[AUDIO] PHASE 1 [${isMobile ? "MOBILE" : "DESKTOP"}]: IMMEDIATE send with sufficient content (${estimatedSamples} samples, threshold: ${minPhase1Samples})`,
+            );
+            // Send synchronously - first words go out ASAP
+            sendAllAudioToAvatar(true); // isImmediateSend = true for minimal silence
+            return;
+          }
         }
-        // Don't return - fall through to buffer limit / gap detection
-      } else if (!hassentImmediateRef.current && currentBufferLength === 1) {
-        // Normal responses: PHASE 1 immediate (unchanged)
-        hassentImmediateRef.current = true;
-        console.log(
-          `[AUDIO] PHASE 1: IMMEDIATE send first chunk (first words) - NO DELAY`,
-        );
-        // Send synchronously - first words go out ASAP
-        sendAllAudioToAvatar(true); // isImmediateSend = true for minimal silence
-        return;
       }
 
       // MOBILE OPTIMIZATION: Check if buffer exceeds limit
       // Mobile CPUs struggle with large resamples - process in smaller batches
       // Uses runtime audioConfig.maxBufferSamples for device-specific limits
+      // GREETING FIX: Skip buffer limit for greeting to accumulate full message
       const currentSamples = calculateBufferSamples(audioBufferRef.current);
-
-      // GREETING: Skip buffer limit to avoid fragmentation
-      // The greeting should be sent as ONE piece via gap detection or onAgentResponseEnd
-      if (isFirstAudioRef.current && GREETING_SKIP_PHASE1) {
-        // Log only once per greeting (when we first exceed the limit)
-        if (currentSamples >= audioConfig.maxBufferSamples) {
+      if (currentSamples >= audioConfig.maxBufferSamples) {
+        if (isFirstAudioRef.current && GREETING_SKIP_PHASE1) {
           console.log(
-            `[AUDIO] GREETING: Skipping buffer limit (${currentSamples} samples) - accumulating for single send`,
+            `[AUDIO] GREETING: Skipping buffer limit (${currentSamples}/${audioConfig.maxBufferSamples} samples) - accumulating more`,
           );
+          // Continue to gap detection - don't return
+        } else {
+          console.log(
+            `[AUDIO] BUFFER LIMIT: ${currentSamples} samples >= ${audioConfig.maxBufferSamples}, processing NOW`,
+          );
+          // Clear gap detection since we're processing now
+          if (gapCheckIntervalRef.current) {
+            clearInterval(gapCheckIntervalRef.current);
+            gapCheckIntervalRef.current = null;
+          }
+          sendAllAudioToAvatar(false); // PHASE 2 style padding
+          return;
         }
-        // Don't return - continue to gap detection setup below
-      } else if (currentSamples >= audioConfig.maxBufferSamples) {
-        console.log(
-          `[AUDIO] BUFFER LIMIT: ${currentSamples} samples >= ${audioConfig.maxBufferSamples}, processing NOW`,
-        );
-        // Clear gap detection since we're processing now
-        if (gapCheckIntervalRef.current) {
-          clearInterval(gapCheckIntervalRef.current);
-          gapCheckIntervalRef.current = null;
-        }
-        sendAllAudioToAvatar(false); // PHASE 2 style padding
-        return;
       }
 
       // Phase 2: For remaining chunks, use gap detection
@@ -972,10 +1028,12 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       sendAllAudioToAvatar();
     },
     onAgentResponse: () => {
-      // Agent started responding - reset interrupt debounce
-      // Any chunks arriving now are from the NEW response, not ghosts
       console.log("[AUDIO] agent_response received - new response starting");
-      lastInterruptTimeRef.current = 0; // Reset debounce to accept new audio
+
+      // GREETING FIX: Reset interrupt debounce to accept new audio chunks immediately
+      // Without this, fast responses (<300ms) get discarded as "ghost chunks"
+      lastInterruptTimeRef.current = 0;
+      console.log("[AUDIO] Reset interrupt debounce for new response");
     },
     onInterruption: () => {
       // ElevenLabs confirmed user actually interrupted the agent
@@ -1270,10 +1328,10 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
                 onClick={onEndCall}
                 variant="destructive"
                 size="lg"
-                className="flex items-center gap-2 flex-1 max-w-xs justify-center floating-glass bg-red-500/90 hover:bg-red-500 border border-red-400/30"
+                className="flex items-center gap-2 flex-1 max-w-xs justify-center floating-glass glass-morphism-strong bg-red-500/95 hover:bg-red-500 border border-red-400/40 shadow-xl transition-all duration-300 text-gray-900"
               >
                 <PhoneOff className="w-5 h-5" />
-                <span>Finalizar</span>
+                <span className="font-medium">Finalizar</span>
               </Button>
 
               {/* Spacer for symmetry */}
@@ -1348,6 +1406,48 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
   const { fixedHeight, isInIframe } = useFixedHeight();
   const { isDesktop } = useScreenSize();
 
+  // Rate limit state
+  const [isRateLimited, setIsRateLimited] = useState(false);
+  const [rateLimitCountdown, setRateLimitCountdown] = useState(0);
+  const rateLimitTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Cleanup rate limit timer on unmount
+  useEffect(() => {
+    return () => {
+      if (rateLimitTimerRef.current) {
+        clearInterval(rateLimitTimerRef.current);
+        rateLimitTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  // Countdown timer for rate limit
+  useEffect(() => {
+    if (rateLimitCountdown > 0) {
+      setIsRateLimited(true);
+      rateLimitTimerRef.current = setInterval(() => {
+        setRateLimitCountdown((prev) => {
+          const newValue = prev - 1;
+          if (newValue <= 0) {
+            setIsRateLimited(false);
+            if (rateLimitTimerRef.current) {
+              clearInterval(rateLimitTimerRef.current);
+              rateLimitTimerRef.current = null;
+            }
+          }
+          return newValue <= 0 ? 0 : newValue;
+        });
+      }, 1000);
+
+      return () => {
+        if (rateLimitTimerRef.current) {
+          clearInterval(rateLimitTimerRef.current);
+          rateLimitTimerRef.current = null;
+        }
+      };
+    }
+  }, [rateLimitCountdown]);
+
   const handleStartCall = useCallback(async () => {
     setIsStarting(true);
     setError(null);
@@ -1366,6 +1466,21 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
 
       if (!res.ok) {
         const errorData = await res.json();
+
+        // Handle rate limit (429) specifically
+        if (res.status === 429) {
+          const retryAfter = errorData.retryAfter || 60;
+          setRateLimitCountdown(retryAfter);
+
+          // Show toast notification
+          toast.error("Límite de sesiones alcanzado", {
+            description: `Has iniciado muchas sesiones recientemente. Por favor espera ${retryAfter} segundos antes de intentar nuevamente.`,
+            duration: 5000,
+          });
+
+          return; // Exit early, don't throw error
+        }
+
         throw new Error(errorData.error || "Failed to start session");
       }
 
@@ -1415,6 +1530,8 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
           isLoading={isStarting}
           userName={userName}
           customerData={customerData}
+          isRateLimited={isRateLimited}
+          rateLimitCountdown={rateLimitCountdown}
         />
       ) : (
         <LiveAvatarContextProvider

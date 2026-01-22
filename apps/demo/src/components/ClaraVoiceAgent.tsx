@@ -29,15 +29,7 @@ import { Skeleton } from "./ui/skeleton";
 import Image from "next/image";
 
 // Lucide icons
-import {
-  Phone,
-  PhoneOff,
-  Mic,
-  MicOff,
-  Loader2,
-  AlertTriangle,
-  Clock,
-} from "lucide-react";
+import { Phone, PhoneOff, Mic, MicOff, Loader2, Clock } from "lucide-react";
 
 // Debug tools
 import { MobileLogger } from "./debug/MobileLogger";
@@ -146,63 +138,6 @@ const GREETING_SKIP_PHASE1 = true;
 const getMinPhase1Samples = (isMobile: boolean): number => {
   return isMobile ? 36000 : 48000; // Mobile: 2.25s, Desktop: 3s
 };
-
-// ============================================
-// SAFARI iOS DETECTION
-// ============================================
-const isSafariIOS = (): boolean => {
-  if (typeof window === "undefined") return false;
-  const ua = window.navigator.userAgent;
-  const iOS = /iPad|iPhone|iPod/.test(ua);
-  const webkit = /WebKit/.test(ua);
-  const notChrome = !/CriOS/.test(ua);
-  const notFirefox = !/FxiOS/.test(ua);
-  return iOS && webkit && notChrome && notFirefox;
-};
-
-// ============================================
-// SAFARI iOS WARNING BANNER (non-blocking)
-// ============================================
-interface SafariBannerProps {
-  onClose: () => void;
-}
-
-const SafariBanner: React.FC<SafariBannerProps> = ({ onClose }) => (
-  <div className="fixed top-0 left-0 right-0 z-50 bg-amber-50 border-b border-amber-200 px-4 py-3 shadow-sm">
-    <div className="flex items-center justify-between max-w-4xl mx-auto">
-      <div className="flex items-center gap-3">
-        <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0" />
-        <div>
-          <p className="text-sm font-medium text-amber-800">
-            Safari iOS tiene limitaciones
-          </p>
-          <p className="text-xs text-amber-600">
-            Para mejor experiencia, usa Chrome o un navegador de escritorio.
-          </p>
-        </div>
-      </div>
-      <button
-        onClick={onClose}
-        className="text-amber-600 hover:text-amber-800 p-1 rounded-full hover:bg-amber-100 transition-colors"
-        aria-label="Cerrar aviso"
-      >
-        <svg
-          className="w-5 h-5"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M6 18L18 6M6 6l12 12"
-          />
-        </svg>
-      </button>
-    </div>
-  </div>
-);
 
 // ============================================
 // SESSION EXPIRY WARNING BANNER
@@ -1427,7 +1362,6 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
   const [sessionToken, setSessionToken] = useState<string | null>(null);
   const [isStarting, setIsStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showSafariBanner, setShowSafariBanner] = useState(() => isSafariIOS());
   const { fixedHeight, isInIframe } = useFixedHeight();
   const { isDesktop } = useScreenSize();
 
@@ -1532,11 +1466,6 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
       className="w-full h-full min-h-screen flex flex-col items-center justify-center bg-slate-50"
       style={containerStyle}
     >
-      {/* Safari iOS warning banner (non-blocking) */}
-      {showSafariBanner && (
-        <SafariBanner onClose={() => setShowSafariBanner(false)} />
-      )}
-
       {error && (
         <div className="absolute top-4 left-4 right-4 z-50 bg-red-100 border border-red-300 text-red-700 px-4 py-3 rounded-lg">
           <p className="text-sm">{error}</p>

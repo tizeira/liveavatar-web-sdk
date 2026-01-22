@@ -77,6 +77,11 @@ const CHUNK_WAIT_TIMEOUT_MS = 20000; // 20s timeout per chunk
 // Ghost chunk protection: Ignore chunks arriving shortly after interrupt
 const INTERRUPT_DEBOUNCE_MS = 300; // Ignore chunks for 300ms after interrupt
 
+// Late transcript protection: Ignore user transcripts arriving shortly after audio sent
+// On mobile, transcripts can arrive 3-50ms after audio was already sent to HeyGen
+// Users cannot realistically interrupt within 100ms of receiving audio
+const AUDIO_SENT_GRACE_PERIOD_MS = 100;
+
 // Target sample rate for HeyGen
 const TARGET_SAMPLE_RATE = 24000;
 
@@ -540,6 +545,9 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
   // Track if HeyGen is currently playing audio (for conditional interrupt handling)
   const isSendingAudioRef = useRef(false);
 
+  // Track when audio was sent to HeyGen (for late transcript detection)
+  const audioSentTimeRef = useRef<number>(0);
+
   // Track ElevenLabs source sample rate (for resampling)
   const sourceRateRef = useRef<number>(16000);
 
@@ -710,6 +718,8 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
         // Report audio sent for latency tracking (only first chunk)
         if (i === 0) {
           reportAudioSentRef.current?.();
+          // Track when audio was sent (for late transcript detection)
+          audioSentTimeRef.current = Date.now();
         }
 
         isSendingAudioRef.current = true;
@@ -857,6 +867,9 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       try {
         // Report audio sent for latency tracking
         reportAudioSentRef.current?.();
+
+        // Track when audio was sent (for late transcript detection)
+        audioSentTimeRef.current = Date.now();
 
         isSendingAudioRef.current = true;
         sessionRef.current.repeatAudio(finalAudio);
@@ -1075,6 +1088,18 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       // CONDITIONAL INTERRUPT: Only clear buffer if avatar is CURRENTLY speaking
       // If avatar finished, chunks arriving are from the NEW response - preserve them
       if (isSendingAudioRef.current) {
+        // Check if this is a LATE transcript (arrived shortly after audio was sent)
+        // On mobile, transcripts can arrive 3-50ms after audio was already sent
+        // Users cannot realistically interrupt within 100ms of receiving audio
+        const timeSinceAudioSent = Date.now() - audioSentTimeRef.current;
+
+        if (timeSinceAudioSent < AUDIO_SENT_GRACE_PERIOD_MS) {
+          console.log(
+            `[AUDIO] Ignoring late transcript (${timeSinceAudioSent}ms since audio sent)`,
+          );
+          return; // Don't clear buffer - this is a late transcript, not a real interruption
+        }
+
         console.log("[AUDIO] User interrupted active speech - clearing buffer");
 
         // Record interrupt time for debounce (ignore ghost chunks)

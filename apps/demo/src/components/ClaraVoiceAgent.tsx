@@ -13,7 +13,12 @@ import {
   WidgetState,
   CustomerData,
 } from "../liveavatar";
-import { useScreenSize, useFixedHeight, useElevenLabsAgent } from "../hooks";
+import {
+  useScreenSize,
+  useFixedHeight,
+  useElevenLabsAgent,
+  VadInfo,
+} from "../hooks";
 
 // shadcn/ui components
 import { Button } from "./ui/button";
@@ -53,6 +58,21 @@ const SESSION_LIMIT_ENABLED = true;
 const SESSION_LIMIT_MINUTES = 10;
 // Warning before session ends (in seconds)
 const SESSION_WARNING_SECONDS = 30;
+
+// ============================================
+// SMART INTERRUPTION CONFIGURATION
+// ============================================
+// Filter out noise and brief sounds from triggering interruptions
+// ElevenLabs sends vad_score events with voice confidence (0-1)
+
+// Minimum speech duration before allowing interruption (prevents noise triggers)
+const MIN_SPEECH_DURATION_MS = 800; // ~1 second of real speech required
+
+// Minimum VAD score to consider valid speech (0-1 range from ElevenLabs)
+const MIN_VAD_SCORE_FOR_INTERRUPT = 0.5;
+
+// Enable/disable smart interruption filtering (set false for original behavior)
+const SMART_INTERRUPTION_ENABLED = true;
 
 // ============================================
 // HYBRID AUDIO STRATEGY CONSTANTS
@@ -640,6 +660,15 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       );
 
       for (let i = 0; i < chunks.length; i++) {
+        // Check if interrupted before sending next chunk
+        // (isSendingAudioRef is set to false when interruption occurs)
+        if (i > 0 && !isSendingAudioRef.current) {
+          console.log(
+            `[AUDIO] Chunk send interrupted at ${i + 1}/${chunks.length} - stopping`,
+          );
+          break;
+        }
+
         const chunk = chunks[i]!;
         const sizeKB = Math.round((chunk.length * 0.75) / 1024);
 
@@ -980,9 +1009,32 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       lastInterruptTimeRef.current = 0;
       console.log("[AUDIO] Reset interrupt debounce for new response");
     },
-    onInterruption: () => {
-      // ElevenLabs confirmed user actually interrupted the agent
-      console.log("[AUDIO] Interruption confirmed - clearing buffer");
+    onInterruption: (vadInfo: VadInfo) => {
+      const { vadScore, speechDuration } = vadInfo;
+
+      // SMART INTERRUPTION FILTERING: Verify this is a real interruption
+      if (SMART_INTERRUPTION_ENABLED) {
+        // Check VAD score - must be above threshold for real speech
+        if (vadScore < MIN_VAD_SCORE_FOR_INTERRUPT) {
+          console.log(
+            `[AUDIO] Ignoring interruption - low VAD (${vadScore.toFixed(2)} < ${MIN_VAD_SCORE_FOR_INTERRUPT})`,
+          );
+          return;
+        }
+
+        // Check speech duration - must speak long enough to be intentional
+        if (speechDuration < MIN_SPEECH_DURATION_MS) {
+          console.log(
+            `[AUDIO] Ignoring interruption - speech too short (${speechDuration}ms < ${MIN_SPEECH_DURATION_MS}ms)`,
+          );
+          return;
+        }
+      }
+
+      // Valid interruption - proceed
+      console.log(
+        `[AUDIO] Valid interruption - VAD: ${vadScore.toFixed(2)}, Duration: ${speechDuration}ms`,
+      );
 
       // Set flag to add leading silence on next response (gives HeyGen time after interrupt)
       isAfterInterruptRef.current = true;
@@ -1006,8 +1058,18 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       totalChunksReceivedRef.current = 0;
       hassentImmediateRef.current = false; // Reset for next response
       isSendingAudioRef.current = false; // Reset sending state
+
+      // CRITICAL: Interrupt HeyGen avatar playback
+      if (sessionRef.current) {
+        try {
+          sessionRef.current.interrupt();
+          console.log("[AUDIO] HeyGen avatar interrupted");
+        } catch {
+          // Ignore interrupt errors (session may already be stopped)
+        }
+      }
     },
-    onUserTranscript: (text) => {
+    onUserTranscript: (text, vadInfo) => {
       console.log("[AUDIO] User said:", text);
 
       // Filter out noise/empty transcripts
@@ -1030,6 +1092,16 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
             `[AUDIO] Ignoring late transcript (${timeSinceAudioSent}ms since audio sent)`,
           );
           return; // Don't clear buffer - this is a late transcript, not a real interruption
+        }
+
+        // SMART INTERRUPTION: Check VAD score if available
+        if (SMART_INTERRUPTION_ENABLED && vadInfo) {
+          if (vadInfo.vadScore < MIN_VAD_SCORE_FOR_INTERRUPT) {
+            console.log(
+              `[AUDIO] Ignoring transcript interruption - low VAD (${vadInfo.vadScore.toFixed(2)})`,
+            );
+            return;
+          }
         }
 
         console.log("[AUDIO] User interrupted active speech - clearing buffer");
@@ -1156,6 +1228,37 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Keep-alive interval to prevent HeyGen session timeout (10 min inactivity)
+  const keepAliveIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    const session = sessionRef.current;
+    if (!session) return;
+
+    // Send keep-alive every 5 minutes to prevent timeout
+    keepAliveIntervalRef.current = setInterval(
+      () => {
+        session
+          .keepAlive()
+          .then(() => {
+            console.log("[HEYGEN] Keep-alive sent successfully");
+          })
+          .catch((error) => {
+            console.warn("[HEYGEN] Keep-alive failed:", error);
+          });
+      },
+      5 * 60 * 1000,
+    ); // 5 minutes
+
+    return () => {
+      if (keepAliveIntervalRef.current) {
+        clearInterval(keepAliveIntervalRef.current);
+        keepAliveIntervalRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Session limit timer - only runs if SESSION_LIMIT_ENABLED is true
   useEffect(() => {
     if (!SESSION_LIMIT_ENABLED) return;
@@ -1216,6 +1319,11 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       if (sessionTimerRef.current) {
         clearInterval(sessionTimerRef.current);
         sessionTimerRef.current = null;
+      }
+      // Cleanup keep-alive interval
+      if (keepAliveIntervalRef.current) {
+        clearInterval(keepAliveIntervalRef.current);
+        keepAliveIntervalRef.current = null;
       }
       // Clear audio buffer
       audioBufferRef.current = [];

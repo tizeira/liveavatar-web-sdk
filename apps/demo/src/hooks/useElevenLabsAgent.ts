@@ -40,12 +40,18 @@ export interface CustomerDataForAgent {
   ordersCount?: number;
 }
 
+// VAD (Voice Activity Detection) info passed with interruption callbacks
+export interface VadInfo {
+  vadScore: number; // 0-1 confidence score from ElevenLabs VAD
+  speechDuration: number; // ms since speech started (VAD > 0.5)
+}
+
 export interface UseElevenLabsAgentConfig {
   onAudioData?: (audioBase64: string, sampleRate: number) => void; // Raw audio + sample rate (no resampling in hook)
   onAgentResponse?: (text: string) => void;
   onAgentResponseEnd?: () => void; // Called when agent finishes speaking (all audio sent)
-  onInterruption?: () => void; // Called when user interrupts the agent
-  onUserTranscript?: (text: string) => void;
+  onInterruption?: (vadInfo: VadInfo) => void; // Called when user interrupts the agent (with VAD metrics)
+  onUserTranscript?: (text: string, vadInfo?: VadInfo) => void; // Called with user transcript (optionally with VAD info)
   onError?: (error: string) => void;
   onLatencyMetrics?: (metrics: Partial<LatencyMetrics>) => void; // Called with latency data for analytics
   customerData?: CustomerDataForAgent; // Customer data for ElevenLabs dynamic variables
@@ -156,6 +162,10 @@ export const useElevenLabsAgent = (
   const responseIdRef = useRef<number>(0); // Track response cycles
   const hasTrackedAvatarStartRef = useRef<boolean>(false); // Prevent double tracking per response
   const lastAudioSentResponseIdRef = useRef<number>(0); // Track which response the audio was sent for
+
+  // VAD (Voice Activity Detection) tracking refs
+  const vadScoreRef = useRef<number>(0); // Current VAD score (0-1)
+  const speechStartTimeRef = useRef<number>(0); // Timestamp when speech started (VAD > 0.5)
 
   // Cleanup function
   const cleanup = useCallback(() => {
@@ -376,6 +386,18 @@ export const useElevenLabsAgent = (
             responseIdRef.current++;
             const currentResponseId = responseIdRef.current;
 
+            // Calculate speech duration at transcript time
+            const speechDuration =
+              speechStartTimeRef.current > 0
+                ? userTranscriptTime - speechStartTimeRef.current
+                : 0;
+
+            // Capture current VAD info for callback
+            const vadInfo: VadInfo = {
+              vadScore: vadScoreRef.current,
+              speechDuration,
+            };
+
             // Reset latency tracking for new response cycle
             latencyRef.current = {
               responseId: currentResponseId,
@@ -391,14 +413,16 @@ export const useElevenLabsAgent = (
             console.log(
               `[LATENCY] #${currentResponseId} User transcript received at ${userTranscriptTime}`,
             );
-            console.log(`[AUDIO] User said: ${transcriptText}`);
+            console.log(
+              `[AUDIO] User said: "${transcriptText}" (VAD: ${vadInfo.vadScore.toFixed(2)}, Duration: ${vadInfo.speechDuration}ms)`,
+            );
 
             setState((prev) => ({
               ...prev,
               transcript: transcriptText,
               isThinking: true,
             }));
-            onUserTranscript?.(transcriptText);
+            onUserTranscript?.(transcriptText, vadInfo);
             break;
           }
 
@@ -462,9 +486,20 @@ export const useElevenLabsAgent = (
             }));
             break;
 
-          case "interruption":
-            // User interrupted agent - clear old audio and notify
-            console.log("[ElevenLabs] Interruption - clearing old audio");
+          case "interruption": {
+            // User interrupted agent - calculate speech duration and pass VAD info
+            const speechDuration =
+              speechStartTimeRef.current > 0
+                ? Date.now() - speechStartTimeRef.current
+                : 0;
+
+            console.log(
+              `[ElevenLabs] Interruption - VAD: ${vadScoreRef.current.toFixed(2)}, Duration: ${speechDuration}ms`,
+            );
+
+            // Reset VAD tracking
+            speechStartTimeRef.current = 0;
+
             setState((prev) => ({
               ...prev,
               isSpeaking: false,
@@ -472,8 +507,33 @@ export const useElevenLabsAgent = (
               isListening: true,
             }));
             audioChunksRef.current = [];
-            onInterruption?.();
+
+            // Pass VAD info to callback for smart filtering
+            onInterruption?.({
+              vadScore: vadScoreRef.current,
+              speechDuration,
+            });
             break;
+          }
+
+          case "vad_score": {
+            // VAD (Voice Activity Detection) score from ElevenLabs
+            // Used to filter out noise/brief sounds from real speech
+            const vadScore = data.vad_score_event?.vad_score ?? 0;
+            vadScoreRef.current = vadScore;
+
+            // Track start of real speech (VAD > 0.5 threshold)
+            if (vadScore > 0.5 && speechStartTimeRef.current === 0) {
+              speechStartTimeRef.current = Date.now();
+              console.log(
+                `[ElevenLabs] Speech started (VAD: ${vadScore.toFixed(2)})`,
+              );
+            } else if (vadScore < 0.3) {
+              // Reset if VAD falls below threshold (user stopped speaking)
+              speechStartTimeRef.current = 0;
+            }
+            break;
+          }
 
           case "ping":
             // Respond to ping with the delay ElevenLabs requests (for timing sync)

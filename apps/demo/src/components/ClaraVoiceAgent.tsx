@@ -31,9 +31,6 @@ import Image from "next/image";
 // Lucide icons
 import { Phone, PhoneOff, Mic, MicOff, Loader2, Clock } from "lucide-react";
 
-// Debug tools
-import { MobileLogger } from "./debug/MobileLogger";
-
 // Toast notifications
 import { toast } from "sonner";
 
@@ -1496,9 +1493,6 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
           <SessionWrapper onSessionStopped={handleSessionStopped} />
         </LiveAvatarContextProvider>
       )}
-
-      {/* Mobile debug logger - shows [AUDIO] logs on screen */}
-      <MobileLogger enabled={isMobileDevice()} filter="[AUDIO]" maxLogs={100} />
     </div>
   );
 };

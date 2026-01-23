@@ -5,4 +5,5 @@ export type {
   ElevenLabsAgentState,
   UseElevenLabsAgentConfig,
   UseElevenLabsAgentReturn,
+  VadInfo,
 } from "./useElevenLabsAgent";

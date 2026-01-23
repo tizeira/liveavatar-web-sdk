@@ -13,7 +13,12 @@ import {
   WidgetState,
   CustomerData,
 } from "../liveavatar";
-import { useScreenSize, useFixedHeight, useElevenLabsAgent } from "../hooks";
+import {
+  useScreenSize,
+  useFixedHeight,
+  useElevenLabsAgent,
+  VadInfo,
+} from "../hooks";
 
 // shadcn/ui components
 import { Button } from "./ui/button";
@@ -29,18 +34,7 @@ import { Skeleton } from "./ui/skeleton";
 import Image from "next/image";
 
 // Lucide icons
-import {
-  Phone,
-  PhoneOff,
-  Mic,
-  MicOff,
-  Loader2,
-  AlertTriangle,
-  Clock,
-} from "lucide-react";
-
-// Debug tools
-import { MobileLogger } from "./debug/MobileLogger";
+import { Phone, PhoneOff, Mic, MicOff, Loader2, Clock } from "lucide-react";
 
 // Toast notifications
 import { toast } from "sonner";
@@ -66,6 +60,21 @@ const SESSION_LIMIT_MINUTES = 10;
 const SESSION_WARNING_SECONDS = 30;
 
 // ============================================
+// SMART INTERRUPTION CONFIGURATION
+// ============================================
+// Filter out noise and brief sounds from triggering interruptions
+// ElevenLabs sends vad_score events with voice confidence (0-1)
+
+// Minimum speech duration before allowing interruption (prevents noise triggers)
+const MIN_SPEECH_DURATION_MS = 800; // ~1 second of real speech required
+
+// Minimum VAD score to consider valid speech (0-1 range from ElevenLabs)
+const MIN_VAD_SCORE_FOR_INTERRUPT = 0.5;
+
+// Enable/disable smart interruption filtering (set false for original behavior)
+const SMART_INTERRUPTION_ENABLED = true;
+
+// ============================================
 // HYBRID AUDIO STRATEGY CONSTANTS
 // ============================================
 // These are DESKTOP defaults - mobile overrides happen at runtime in component
@@ -76,6 +85,11 @@ const CHUNK_WAIT_TIMEOUT_MS = 20000; // 20s timeout per chunk
 
 // Ghost chunk protection: Ignore chunks arriving shortly after interrupt
 const INTERRUPT_DEBOUNCE_MS = 300; // Ignore chunks for 300ms after interrupt
+
+// Late transcript protection: Ignore user transcripts arriving shortly after audio sent
+// On mobile, transcripts can arrive 3-50ms after audio was already sent to HeyGen
+// Users cannot realistically interrupt within 100ms of receiving audio
+const AUDIO_SENT_GRACE_PERIOD_MS = 100;
 
 // Target sample rate for HeyGen
 const TARGET_SAMPLE_RATE = 24000;
@@ -141,63 +155,6 @@ const GREETING_SKIP_PHASE1 = true;
 const getMinPhase1Samples = (isMobile: boolean): number => {
   return isMobile ? 36000 : 48000; // Mobile: 2.25s, Desktop: 3s
 };
-
-// ============================================
-// SAFARI iOS DETECTION
-// ============================================
-const isSafariIOS = (): boolean => {
-  if (typeof window === "undefined") return false;
-  const ua = window.navigator.userAgent;
-  const iOS = /iPad|iPhone|iPod/.test(ua);
-  const webkit = /WebKit/.test(ua);
-  const notChrome = !/CriOS/.test(ua);
-  const notFirefox = !/FxiOS/.test(ua);
-  return iOS && webkit && notChrome && notFirefox;
-};
-
-// ============================================
-// SAFARI iOS WARNING BANNER (non-blocking)
-// ============================================
-interface SafariBannerProps {
-  onClose: () => void;
-}
-
-const SafariBanner: React.FC<SafariBannerProps> = ({ onClose }) => (
-  <div className="fixed top-0 left-0 right-0 z-50 bg-amber-50 border-b border-amber-200 px-4 py-3 shadow-sm">
-    <div className="flex items-center justify-between max-w-4xl mx-auto">
-      <div className="flex items-center gap-3">
-        <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0" />
-        <div>
-          <p className="text-sm font-medium text-amber-800">
-            Safari iOS tiene limitaciones
-          </p>
-          <p className="text-xs text-amber-600">
-            Para mejor experiencia, usa Chrome o un navegador de escritorio.
-          </p>
-        </div>
-      </div>
-      <button
-        onClick={onClose}
-        className="text-amber-600 hover:text-amber-800 p-1 rounded-full hover:bg-amber-100 transition-colors"
-        aria-label="Cerrar aviso"
-      >
-        <svg
-          className="w-5 h-5"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M6 18L18 6M6 6l12 12"
-          />
-        </svg>
-      </button>
-    </div>
-  </div>
-);
 
 // ============================================
 // SESSION EXPIRY WARNING BANNER
@@ -540,6 +497,9 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
   // Track if HeyGen is currently playing audio (for conditional interrupt handling)
   const isSendingAudioRef = useRef(false);
 
+  // Track when audio was sent to HeyGen (for late transcript detection)
+  const audioSentTimeRef = useRef<number>(0);
+
   // Track ElevenLabs source sample rate (for resampling)
   const sourceRateRef = useRef<number>(16000);
 
@@ -700,6 +660,15 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       );
 
       for (let i = 0; i < chunks.length; i++) {
+        // Check if interrupted before sending next chunk
+        // (isSendingAudioRef is set to false when interruption occurs)
+        if (i > 0 && !isSendingAudioRef.current) {
+          console.log(
+            `[AUDIO] Chunk send interrupted at ${i + 1}/${chunks.length} - stopping`,
+          );
+          break;
+        }
+
         const chunk = chunks[i]!;
         const sizeKB = Math.round((chunk.length * 0.75) / 1024);
 
@@ -710,6 +679,8 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
         // Report audio sent for latency tracking (only first chunk)
         if (i === 0) {
           reportAudioSentRef.current?.();
+          // Track when audio was sent (for late transcript detection)
+          audioSentTimeRef.current = Date.now();
         }
 
         isSendingAudioRef.current = true;
@@ -857,6 +828,9 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       try {
         // Report audio sent for latency tracking
         reportAudioSentRef.current?.();
+
+        // Track when audio was sent (for late transcript detection)
+        audioSentTimeRef.current = Date.now();
 
         isSendingAudioRef.current = true;
         sessionRef.current.repeatAudio(finalAudio);
@@ -1035,9 +1009,32 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       lastInterruptTimeRef.current = 0;
       console.log("[AUDIO] Reset interrupt debounce for new response");
     },
-    onInterruption: () => {
-      // ElevenLabs confirmed user actually interrupted the agent
-      console.log("[AUDIO] Interruption confirmed - clearing buffer");
+    onInterruption: (vadInfo: VadInfo) => {
+      const { vadScore, speechDuration } = vadInfo;
+
+      // SMART INTERRUPTION FILTERING: Verify this is a real interruption
+      if (SMART_INTERRUPTION_ENABLED) {
+        // Check VAD score - must be above threshold for real speech
+        if (vadScore < MIN_VAD_SCORE_FOR_INTERRUPT) {
+          console.log(
+            `[AUDIO] Ignoring interruption - low VAD (${vadScore.toFixed(2)} < ${MIN_VAD_SCORE_FOR_INTERRUPT})`,
+          );
+          return;
+        }
+
+        // Check speech duration - must speak long enough to be intentional
+        if (speechDuration < MIN_SPEECH_DURATION_MS) {
+          console.log(
+            `[AUDIO] Ignoring interruption - speech too short (${speechDuration}ms < ${MIN_SPEECH_DURATION_MS}ms)`,
+          );
+          return;
+        }
+      }
+
+      // Valid interruption - proceed
+      console.log(
+        `[AUDIO] Valid interruption - VAD: ${vadScore.toFixed(2)}, Duration: ${speechDuration}ms`,
+      );
 
       // Set flag to add leading silence on next response (gives HeyGen time after interrupt)
       isAfterInterruptRef.current = true;
@@ -1061,8 +1058,18 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       totalChunksReceivedRef.current = 0;
       hassentImmediateRef.current = false; // Reset for next response
       isSendingAudioRef.current = false; // Reset sending state
+
+      // CRITICAL: Interrupt HeyGen avatar playback
+      if (sessionRef.current) {
+        try {
+          sessionRef.current.interrupt();
+          console.log("[AUDIO] HeyGen avatar interrupted");
+        } catch {
+          // Ignore interrupt errors (session may already be stopped)
+        }
+      }
     },
-    onUserTranscript: (text) => {
+    onUserTranscript: (text, vadInfo) => {
       console.log("[AUDIO] User said:", text);
 
       // Filter out noise/empty transcripts
@@ -1075,6 +1082,28 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       // CONDITIONAL INTERRUPT: Only clear buffer if avatar is CURRENTLY speaking
       // If avatar finished, chunks arriving are from the NEW response - preserve them
       if (isSendingAudioRef.current) {
+        // Check if this is a LATE transcript (arrived shortly after audio was sent)
+        // On mobile, transcripts can arrive 3-50ms after audio was already sent
+        // Users cannot realistically interrupt within 100ms of receiving audio
+        const timeSinceAudioSent = Date.now() - audioSentTimeRef.current;
+
+        if (timeSinceAudioSent < AUDIO_SENT_GRACE_PERIOD_MS) {
+          console.log(
+            `[AUDIO] Ignoring late transcript (${timeSinceAudioSent}ms since audio sent)`,
+          );
+          return; // Don't clear buffer - this is a late transcript, not a real interruption
+        }
+
+        // SMART INTERRUPTION: Check VAD score if available
+        if (SMART_INTERRUPTION_ENABLED && vadInfo) {
+          if (vadInfo.vadScore < MIN_VAD_SCORE_FOR_INTERRUPT) {
+            console.log(
+              `[AUDIO] Ignoring transcript interruption - low VAD (${vadInfo.vadScore.toFixed(2)})`,
+            );
+            return;
+          }
+        }
+
         console.log("[AUDIO] User interrupted active speech - clearing buffer");
 
         // Record interrupt time for debounce (ignore ghost chunks)
@@ -1199,6 +1228,37 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Keep-alive interval to prevent HeyGen session timeout (10 min inactivity)
+  const keepAliveIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    const session = sessionRef.current;
+    if (!session) return;
+
+    // Send keep-alive every 5 minutes to prevent timeout
+    keepAliveIntervalRef.current = setInterval(
+      () => {
+        session
+          .keepAlive()
+          .then(() => {
+            console.log("[HEYGEN] Keep-alive sent successfully");
+          })
+          .catch((error) => {
+            console.warn("[HEYGEN] Keep-alive failed:", error);
+          });
+      },
+      5 * 60 * 1000,
+    ); // 5 minutes
+
+    return () => {
+      if (keepAliveIntervalRef.current) {
+        clearInterval(keepAliveIntervalRef.current);
+        keepAliveIntervalRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Session limit timer - only runs if SESSION_LIMIT_ENABLED is true
   useEffect(() => {
     if (!SESSION_LIMIT_ENABLED) return;
@@ -1259,6 +1319,11 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       if (sessionTimerRef.current) {
         clearInterval(sessionTimerRef.current);
         sessionTimerRef.current = null;
+      }
+      // Cleanup keep-alive interval
+      if (keepAliveIntervalRef.current) {
+        clearInterval(keepAliveIntervalRef.current);
+        keepAliveIntervalRef.current = null;
       }
       // Clear audio buffer
       audioBufferRef.current = [];
@@ -1402,7 +1467,6 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
   const [sessionToken, setSessionToken] = useState<string | null>(null);
   const [isStarting, setIsStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showSafariBanner, setShowSafariBanner] = useState(() => isSafariIOS());
   const { fixedHeight, isInIframe } = useFixedHeight();
   const { isDesktop } = useScreenSize();
 
@@ -1507,11 +1571,6 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
       className="w-full h-full min-h-screen flex flex-col items-center justify-center bg-slate-50"
       style={containerStyle}
     >
-      {/* Safari iOS warning banner (non-blocking) */}
-      {showSafariBanner && (
-        <SafariBanner onClose={() => setShowSafariBanner(false)} />
-      )}
-
       {error && (
         <div className="absolute top-4 left-4 right-4 z-50 bg-red-100 border border-red-300 text-red-700 px-4 py-3 rounded-lg">
           <p className="text-sm">{error}</p>
@@ -1542,9 +1601,6 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
           <SessionWrapper onSessionStopped={handleSessionStopped} />
         </LiveAvatarContextProvider>
       )}
-
-      {/* Mobile debug logger - shows [AUDIO] logs on screen */}
-      <MobileLogger enabled={isMobileDevice()} filter="[AUDIO]" maxLogs={100} />
     </div>
   );
 };

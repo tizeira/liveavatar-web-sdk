@@ -75,6 +75,13 @@ const MIN_VAD_SCORE_FOR_INTERRUPT = 0.5;
 const SMART_INTERRUPTION_ENABLED = true;
 
 // ============================================
+// INTERRUPT RACE CONDITION PROTECTION
+// ============================================
+// Time window after interrupt where we block sending audio to HeyGen
+// Prevents race condition where sendAllAudioToAvatar() continues after interrupt
+const INTERRUPT_BLOCK_WINDOW_MS = 500;
+
+// ============================================
 // HYBRID AUDIO STRATEGY CONSTANTS
 // ============================================
 // These are DESKTOP defaults - mobile overrides happen at runtime in component
@@ -660,11 +667,21 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       );
 
       for (let i = 0; i < chunks.length; i++) {
-        // Check if interrupted before sending next chunk
-        // (isSendingAudioRef is set to false when interruption occurs)
-        if (i > 0 && !isSendingAudioRef.current) {
+        // DOUBLE CHECK: Both flag AND timestamp-based interrupt detection
+        const timeSinceInterrupt = Date.now() - lastInterruptTimeRef.current;
+
+        // Check 1: Flag-based (set to false when interruption occurs)
+        if (!isSendingAudioRef.current && i > 0) {
           console.log(
-            `[AUDIO] Chunk send interrupted at ${i + 1}/${chunks.length} - stopping`,
+            `[SEND] ⛔ Chunk ${i + 1}/${chunks.length} stopped - isSendingAudioRef=false`,
+          );
+          break;
+        }
+
+        // Check 2: Timestamp-based (recent interrupt blocks all sends)
+        if (timeSinceInterrupt < INTERRUPT_BLOCK_WINDOW_MS) {
+          console.log(
+            `[SEND] ⛔ Chunk ${i + 1}/${chunks.length} blocked - interrupt ${timeSinceInterrupt}ms ago`,
           );
           break;
         }
@@ -672,9 +689,7 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
         const chunk = chunks[i]!;
         const sizeKB = Math.round((chunk.length * 0.75) / 1024);
 
-        console.log(
-          `[AUDIO] Sending chunk ${i + 1}/${chunks.length} (${sizeKB}KB)`,
-        );
+        console.log(`[SEND] ✅ Chunk ${i + 1}/${chunks.length} (${sizeKB}KB)`);
 
         // Report audio sent for latency tracking (only first chunk)
         if (i === 0) {
@@ -798,6 +813,16 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       );
 
       if (audioSizeBytes > MAX_AUDIO_SIZE_BYTES) {
+        // INTERRUPT CHECK: Verify no recent interrupt before chunked send
+        const timeSinceInterrupt = Date.now() - lastInterruptTimeRef.current;
+        if (timeSinceInterrupt < INTERRUPT_BLOCK_WINDOW_MS) {
+          console.log(
+            `[SEND] ⛔ BLOCKED large audio - recent interrupt (${timeSinceInterrupt}ms ago)`,
+          );
+          audioBufferRef.current = [];
+          return;
+        }
+
         console.log(
           `[AUDIO] Audio too large (${audioSizeKB}KB > ${Math.round(MAX_AUDIO_SIZE_BYTES / 1024)}KB), using smart chunking`,
         );
@@ -821,9 +846,19 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
         );
       }
 
-      // 6. Send ALL audio in a single call
+      // 6. INTERRUPT CHECK: Verify no recent interrupt before sending
+      const timeSinceInterrupt = Date.now() - lastInterruptTimeRef.current;
+      if (timeSinceInterrupt < INTERRUPT_BLOCK_WINDOW_MS) {
+        console.log(
+          `[SEND] ⛔ BLOCKED - recent interrupt (${timeSinceInterrupt}ms ago)`,
+        );
+        audioBufferRef.current = [];
+        return;
+      }
+
+      // 7. Send ALL audio in a single call
       console.log(
-        `[AUDIO] Sending complete audio (${totalSizeKB}KB) in single call`,
+        `[SEND] ✅ Sending complete audio (${totalSizeKB}KB) - ${timeSinceInterrupt}ms since last interrupt`,
       );
       try {
         // Report audio sent for latency tracking
@@ -1032,15 +1067,18 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       }
 
       // Valid interruption - proceed
+      const interruptTime = Date.now();
+      console.log(`[INTERRUPT] ══════════════════════════════════════`);
+      console.log(`[INTERRUPT] Valid interruption at T=${interruptTime}`);
       console.log(
-        `[AUDIO] Valid interruption - VAD: ${vadScore.toFixed(2)}, Duration: ${speechDuration}ms`,
+        `[INTERRUPT] VAD: ${vadScore.toFixed(2)}, Duration: ${speechDuration}ms`,
       );
 
       // Set flag to add leading silence on next response (gives HeyGen time after interrupt)
       isAfterInterruptRef.current = true;
 
       // Record interrupt time for debounce (ignore ghost chunks)
-      lastInterruptTimeRef.current = Date.now();
+      lastInterruptTimeRef.current = interruptTime;
 
       // Clear buffer and stop gap detection
       if (gapCheckIntervalRef.current) {
@@ -1063,9 +1101,14 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       if (sessionRef.current) {
         try {
           sessionRef.current.interrupt();
-          console.log("[AUDIO] HeyGen avatar interrupted");
+          console.log(`[INTERRUPT] agent.interrupt sent to HeyGen`);
+          console.log(`[INTERRUPT] ══════════════════════════════════════`);
         } catch {
           // Ignore interrupt errors (session may already be stopped)
+          console.log(
+            `[INTERRUPT] HeyGen interrupt failed (session may be stopped)`,
+          );
+          console.log(`[INTERRUPT] ══════════════════════════════════════`);
         }
       }
     },

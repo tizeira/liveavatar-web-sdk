@@ -75,9 +75,7 @@ const MIN_SPEECH_DURATION_MS = 800; // ~1 second of real speech required
 const MIN_VAD_SCORE_FOR_INTERRUPT = 0.5;
 
 // Enable/disable smart interruption filtering (set false for original behavior)
-// DISABLED: ElevenLabs vad_score events not being received (VAD always 0.00)
-// TODO: Re-enable once VAD events are confirmed working
-const SMART_INTERRUPTION_ENABLED = false;
+const SMART_INTERRUPTION_ENABLED = true;
 
 // ============================================
 // INTERRUPT RACE CONDITION PROTECTION

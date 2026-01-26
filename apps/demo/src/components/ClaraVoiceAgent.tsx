@@ -39,6 +39,9 @@ import { Phone, PhoneOff, Mic, MicOff, Loader2, Clock } from "lucide-react";
 // Toast notifications
 import { toast } from "sonner";
 
+// Debug component for mobile
+import { MobileLogger } from "./debug/MobileLogger";
+
 // ============================================
 // DEVICE DETECTION (runtime, not module-level)
 // ============================================
@@ -1448,6 +1451,9 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
           </div>
         </div>
       </div>
+
+      {/* Mobile Logger for debugging - shows button to open logs */}
+      <MobileLogger enabled={true} maxLogs={200} filter="" />
     </div>
   );
 };

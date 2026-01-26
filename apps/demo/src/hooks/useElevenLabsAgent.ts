@@ -640,6 +640,19 @@ export const useElevenLabsAgent = (
                 user_input_audio_format: inputFormat,
               },
             },
+            conversation: {
+              // Subscribe to all events including vad_score for smart interruption filtering
+              client_events: [
+                "conversation_initiation_metadata",
+                "audio",
+                "user_transcript",
+                "agent_response",
+                "agent_response_correction",
+                "interruption",
+                "vad_score", // Required for smart interruption filtering
+                "ping",
+              ],
+            },
           },
         });
       }

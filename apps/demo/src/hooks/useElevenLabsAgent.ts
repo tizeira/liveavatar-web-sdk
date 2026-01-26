@@ -355,7 +355,10 @@ export const useElevenLabsAgent = (
       // Text data = JSON events
       try {
         const data = JSON.parse(event.data);
-        console.log("ElevenLabs event:", data.type, data);
+        // Log events but skip audio data (too large - base64 encoded)
+        if (data.type !== "audio") {
+          console.log("ElevenLabs event:", data.type, data);
+        }
 
         switch (data.type) {
           case "conversation_initiation_metadata": {

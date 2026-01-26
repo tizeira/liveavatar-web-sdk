@@ -1451,9 +1451,6 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
           </div>
         </div>
       </div>
-
-      {/* Mobile Logger for debugging - shows button to open logs */}
-      <MobileLogger enabled={true} maxLogs={200} filter="" />
     </div>
   );
 };
@@ -1650,6 +1647,9 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
           <SessionWrapper onSessionStopped={handleSessionStopped} />
         </LiveAvatarContextProvider>
       )}
+
+      {/* Mobile Logger - persists across session lifecycle for debugging */}
+      <MobileLogger enabled={true} maxLogs={500} filter="" />
     </div>
   );
 };

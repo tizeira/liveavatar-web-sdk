@@ -39,9 +39,6 @@ import { Phone, PhoneOff, Mic, MicOff, Loader2, Clock } from "lucide-react";
 // Toast notifications
 import { toast } from "sonner";
 
-// Debug component for mobile
-import { MobileLogger } from "./debug/MobileLogger";
-
 // ============================================
 // DEVICE DETECTION (runtime, not module-level)
 // ============================================
@@ -1708,9 +1705,6 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
           <SessionWrapper onSessionStopped={handleSessionStopped} />
         </LiveAvatarContextProvider>
       )}
-
-      {/* Mobile Logger - persists across session lifecycle for debugging */}
-      <MobileLogger enabled={true} maxLogs={500} filter="" />
     </div>
   );
 };

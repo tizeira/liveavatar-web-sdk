@@ -66,15 +66,13 @@ const SESSION_WARNING_SECONDS = 30;
 // SMART INTERRUPTION CONFIGURATION
 // ============================================
 // Filter out noise and brief sounds from triggering interruptions
-// ElevenLabs sends vad_score events with voice confidence (0-1)
-
-// Minimum speech duration before allowing interruption (prevents noise triggers)
-const MIN_SPEECH_DURATION_MS = 800; // ~1 second of real speech required
+// NOTE: onInterruption now trusts ElevenLabs detection directly (no filtering)
+// These constants are only used in onUserTranscript for late transcript detection
 
 // Minimum VAD score to consider valid speech (0-1 range from ElevenLabs)
 const MIN_VAD_SCORE_FOR_INTERRUPT = 0.5;
 
-// Enable/disable smart interruption filtering (set false for original behavior)
+// Enable/disable smart interruption filtering in onUserTranscript (set false for original behavior)
 const SMART_INTERRUPTION_ENABLED = true;
 
 // ============================================
@@ -1143,33 +1141,12 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       console.log("[AUDIO] Reset interrupt debounce for new response");
     },
     onInterruption: (vadInfo: VadInfo) => {
-      const { vadScore, speechDuration } = vadInfo;
-
-      // SMART INTERRUPTION FILTERING: Verify this is a real interruption
-      if (SMART_INTERRUPTION_ENABLED) {
-        // Check VAD score - must be above threshold for real speech
-        if (vadScore < MIN_VAD_SCORE_FOR_INTERRUPT) {
-          console.log(
-            `[AUDIO] Ignoring interruption - low VAD (${vadScore.toFixed(2)} < ${MIN_VAD_SCORE_FOR_INTERRUPT})`,
-          );
-          return;
-        }
-
-        // Check speech duration - must speak long enough to be intentional
-        if (speechDuration < MIN_SPEECH_DURATION_MS) {
-          console.log(
-            `[AUDIO] Ignoring interruption - speech too short (${speechDuration}ms < ${MIN_SPEECH_DURATION_MS}ms)`,
-          );
-          return;
-        }
-      }
-
-      // Valid interruption - proceed
+      // ElevenLabs confirmed user interrupted - trust their detection system
       const interruptTime = Date.now();
       console.log(`[INTERRUPT] ══════════════════════════════════════`);
       console.log(`[INTERRUPT] Valid interruption at T=${interruptTime}`);
       console.log(
-        `[INTERRUPT] VAD: ${vadScore.toFixed(2)}, Duration: ${speechDuration}ms`,
+        `[INTERRUPT] VAD: ${vadInfo.vadScore.toFixed(2)}, Duration: ${vadInfo.speechDuration}ms`,
       );
 
       // Set flag to add leading silence on next response (gives HeyGen time after interrupt)

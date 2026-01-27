@@ -85,6 +85,13 @@ const SMART_INTERRUPTION_ENABLED = true;
 const INTERRUPT_BLOCK_WINDOW_MS = 500;
 
 // ============================================
+// AUDIO FADE-OUT CONFIGURATION
+// ============================================
+// Smooth fade-out when user interrupts (instead of abrupt cut)
+const AUDIO_FADE_ENABLED = true;
+const AUDIO_FADE_DURATION_MS = 250; // 200-300ms recommended
+
+// ============================================
 // HYBRID AUDIO STRATEGY CONSTANTS
 // ============================================
 // These are DESKTOP defaults - mobile overrides happen at runtime in component
@@ -517,6 +524,10 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
   const reportAudioSentRef = useRef<(() => void) | null>(null);
   const reportAvatarStartedRef = useRef<(() => void) | null>(null);
 
+  // Audio fade-out refs for smooth interruptions
+  const fadeInProgressRef = useRef(false);
+  const fadeAnimationRef = useRef<number | null>(null);
+
   // Calculate total samples in buffer (for mobile buffer limit check)
   // Used to prevent accumulating too much audio before processing
   const calculateBufferSamples = useCallback((chunks: string[]): number => {
@@ -528,6 +539,54 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
     // PCM 16-bit = 2 bytes per sample
     return Math.floor(totalBytes / 2);
   }, []);
+
+  // Fade out audio and then interrupt - provides smooth audio transition
+  const fadeOutAndInterrupt = useCallback(() => {
+    if (!AUDIO_FADE_ENABLED || !videoRef.current || !sessionRef.current) {
+      // Fallback: immediate interrupt without fade
+      sessionRef.current?.interrupt();
+      return;
+    }
+
+    // Cancel any existing fade animation
+    if (fadeAnimationRef.current) {
+      cancelAnimationFrame(fadeAnimationRef.current);
+    }
+
+    fadeInProgressRef.current = true;
+    const startVolume = videoRef.current.volume;
+    const startTime = performance.now();
+
+    const animate = (currentTime: number) => {
+      const elapsed = currentTime - startTime;
+      const progress = Math.min(elapsed / AUDIO_FADE_DURATION_MS, 1);
+
+      // Ease-out quadratic for smooth deceleration
+      const eased = 1 - Math.pow(1 - progress, 2);
+      const newVolume = startVolume * (1 - eased);
+
+      if (videoRef.current) {
+        videoRef.current.volume = Math.max(0, newVolume);
+      }
+
+      if (progress < 1) {
+        fadeAnimationRef.current = requestAnimationFrame(animate);
+      } else {
+        // Fade complete - now interrupt
+        sessionRef.current?.interrupt();
+        fadeInProgressRef.current = false;
+        // Restore volume for next response
+        if (videoRef.current) {
+          videoRef.current.volume = 1.0;
+        }
+        fadeAnimationRef.current = null;
+        console.log("[FADE] Fade-out complete, interrupt sent");
+      }
+    };
+
+    console.log("[FADE] Starting fade-out animation");
+    fadeAnimationRef.current = requestAnimationFrame(animate);
+  }, [sessionRef]);
 
   // Generate silence in PCM 16-bit signed, 24kHz mono format (base64)
   const generateSilence = useCallback((durationMs: number): string => {
@@ -1100,20 +1159,10 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       hassentImmediateRef.current = false; // Reset for next response
       isSendingAudioRef.current = false; // Reset sending state
 
-      // CRITICAL: Interrupt HeyGen avatar playback
-      if (sessionRef.current) {
-        try {
-          sessionRef.current.interrupt();
-          console.log(`[INTERRUPT] agent.interrupt sent to HeyGen`);
-          console.log(`[INTERRUPT] ══════════════════════════════════════`);
-        } catch {
-          // Ignore interrupt errors (session may already be stopped)
-          console.log(
-            `[INTERRUPT] HeyGen interrupt failed (session may be stopped)`,
-          );
-          console.log(`[INTERRUPT] ══════════════════════════════════════`);
-        }
-      }
+      // CRITICAL: Interrupt HeyGen avatar playback with smooth fade-out
+      console.log(`[INTERRUPT] Initiating fade-out and interrupt`);
+      fadeOutAndInterrupt();
+      console.log(`[INTERRUPT] ══════════════════════════════════════`);
     },
     onUserTranscript: (text, vadInfo) => {
       console.log("[AUDIO] User said:", text);
@@ -1175,14 +1224,8 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
         // Set flag for leading silence on next response
         isAfterInterruptRef.current = true;
 
-        // Interrupt HeyGen avatar playback
-        if (sessionRef.current) {
-          try {
-            sessionRef.current.interrupt();
-          } catch {
-            // Ignore interrupt errors
-          }
-        }
+        // Interrupt HeyGen avatar playback with smooth fade-out
+        fadeOutAndInterrupt();
       } else {
         // Avatar already finished - don't clear buffer, don't set debounce
         // Chunks arriving are from the NEW response being generated
@@ -1370,6 +1413,11 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       if (keepAliveIntervalRef.current) {
         clearInterval(keepAliveIntervalRef.current);
         keepAliveIntervalRef.current = null;
+      }
+      // Cleanup fade animation
+      if (fadeAnimationRef.current) {
+        cancelAnimationFrame(fadeAnimationRef.current);
+        fadeAnimationRef.current = null;
       }
       // Clear audio buffer
       audioBufferRef.current = [];

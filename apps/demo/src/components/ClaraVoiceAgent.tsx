@@ -526,7 +526,7 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
 
   // Audio fade-out refs for smooth interruptions
   const fadeInProgressRef = useRef(false);
-  const fadeAnimationRef = useRef<number | null>(null);
+  const fadeIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Calculate total samples in buffer (for mobile buffer limit check)
   // Used to prevent accumulating too much audio before processing
@@ -543,49 +543,85 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
   // Fade out audio and then interrupt - provides smooth audio transition
   const fadeOutAndInterrupt = useCallback(() => {
     if (!AUDIO_FADE_ENABLED || !videoRef.current || !sessionRef.current) {
-      // Fallback: immediate interrupt without fade
+      console.log("[FADE] Fade disabled or refs missing, immediate interrupt");
       sessionRef.current?.interrupt();
       return;
     }
 
-    // Cancel any existing fade animation
-    if (fadeAnimationRef.current) {
-      cancelAnimationFrame(fadeAnimationRef.current);
+    // Cancel any existing fade
+    if (fadeIntervalRef.current) {
+      clearInterval(fadeIntervalRef.current);
+      fadeIntervalRef.current = null;
     }
+
+    console.log("[FADE] Starting fade-out with setInterval");
 
     fadeInProgressRef.current = true;
     const startVolume = videoRef.current.volume;
-    const startTime = performance.now();
+    const startTime = Date.now();
+    const frameInterval = 16; // 60fps
 
-    const animate = (currentTime: number) => {
-      const elapsed = currentTime - startTime;
-      const progress = Math.min(elapsed / AUDIO_FADE_DURATION_MS, 1);
+    // Immediate first frame
+    videoRef.current.volume = startVolume;
 
-      // Ease-out quadratic for smooth deceleration
-      const eased = 1 - Math.pow(1 - progress, 2);
-      const newVolume = startVolume * (1 - eased);
+    fadeIntervalRef.current = setInterval(() => {
+      try {
+        const elapsed = Date.now() - startTime;
+        const progress = Math.min(elapsed / AUDIO_FADE_DURATION_MS, 1);
 
-      if (videoRef.current) {
-        videoRef.current.volume = Math.max(0, newVolume);
-      }
+        console.log(
+          `[FADE] Frame: elapsed=${elapsed}ms, progress=${(progress * 100).toFixed(1)}%`,
+        );
 
-      if (progress < 1) {
-        fadeAnimationRef.current = requestAnimationFrame(animate);
-      } else {
-        // Fade complete - now interrupt
-        sessionRef.current?.interrupt();
-        fadeInProgressRef.current = false;
-        // Restore volume for next response
+        // Ease-out quadratic for smooth deceleration
+        const eased = 1 - Math.pow(1 - progress, 2);
+        const newVolume = startVolume * (1 - eased);
+
         if (videoRef.current) {
-          videoRef.current.volume = 1.0;
+          videoRef.current.volume = Math.max(0, newVolume);
+        } else {
+          console.warn("[FADE] videoRef.current is null during fade");
         }
-        fadeAnimationRef.current = null;
-        console.log("[FADE] Fade-out complete, interrupt sent");
-      }
-    };
 
-    console.log("[FADE] Starting fade-out animation");
-    fadeAnimationRef.current = requestAnimationFrame(animate);
+        if (progress >= 1) {
+          // Fade complete - cleanup and interrupt
+          if (fadeIntervalRef.current) {
+            clearInterval(fadeIntervalRef.current);
+            fadeIntervalRef.current = null;
+          }
+
+          fadeInProgressRef.current = false;
+
+          // Restore volume for next response
+          if (videoRef.current) {
+            videoRef.current.volume = 1.0;
+          }
+
+          // NOW interrupt HeyGen
+          console.log("[FADE] Fade-out complete, calling interrupt()");
+          if (sessionRef.current) {
+            try {
+              sessionRef.current.interrupt();
+              console.log("[FADE] interrupt() executed successfully");
+            } catch (error) {
+              console.error("[FADE] Error calling interrupt():", error);
+            }
+          } else {
+            console.error(
+              "[FADE] sessionRef.current is null, cannot interrupt",
+            );
+          }
+        }
+      } catch (error) {
+        console.error("[FADE] Error in fade animation:", error);
+        // Cleanup on error
+        if (fadeIntervalRef.current) {
+          clearInterval(fadeIntervalRef.current);
+          fadeIntervalRef.current = null;
+        }
+        fadeInProgressRef.current = false;
+      }
+    }, frameInterval);
   }, [sessionRef]);
 
   // Generate silence in PCM 16-bit signed, 24kHz mono format (base64)
@@ -1415,9 +1451,9 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
         keepAliveIntervalRef.current = null;
       }
       // Cleanup fade animation
-      if (fadeAnimationRef.current) {
-        cancelAnimationFrame(fadeAnimationRef.current);
-        fadeAnimationRef.current = null;
+      if (fadeIntervalRef.current) {
+        clearInterval(fadeIntervalRef.current);
+        fadeIntervalRef.current = null;
       }
       // Clear audio buffer
       audioBufferRef.current = [];

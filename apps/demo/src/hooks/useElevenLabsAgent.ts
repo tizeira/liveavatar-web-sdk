@@ -355,8 +355,44 @@ export const useElevenLabsAgent = (
       // Text data = JSON events
       try {
         const data = JSON.parse(event.data);
-        // Log events but skip audio data (too large - base64 encoded)
-        if (data.type !== "audio") {
+
+        // Log filtrado: solo eventos importantes o valores relevantes
+        const shouldLog = (() => {
+          // Siempre loggear eventos críticos
+          if (
+            [
+              "user_transcript",
+              "agent_response",
+              "interruption",
+              "agent_response_correction",
+              "agent_chat_response_part",
+            ].includes(data.type)
+          ) {
+            return true;
+          }
+
+          // VAD score: solo si es significativo (> 0.05) o en speech
+          if (data.type === "vad_score") {
+            const score = data.vad_score_event?.vad_score || 0;
+            return score > 0.05; // Filtrar ruido de fondo (~0.001-0.02)
+          }
+
+          // Ping: loggear solo cada 5 pings (~30s)
+          if (data.type === "ping") {
+            const eventId = data.ping_event?.event_id || 0;
+            return eventId % 5 === 0;
+          }
+
+          // Audio: nunca (muy grande)
+          if (data.type === "audio") {
+            return false;
+          }
+
+          // Otros eventos: loggear por si acaso son nuevos
+          return true;
+        })();
+
+        if (shouldLog) {
           console.log("ElevenLabs event:", data.type, data);
         }
 

@@ -1,0 +1,63 @@
+#!/bin/bash
+
+# Validate PR Workflow - Pre-push Hook
+# This hook validates that PRs are created but not merged by automation
+
+# Colors
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+GREEN='\033[0;32m'
+NC='\033[0m' # No Color
+
+# Check if this is being run by Claude Code or automation
+if [ -n "$CLAUDE_SESSION" ] || [ "$CI" = "true" ]; then
+  echo -e "${YELLOW}⚠️  Running in automated context (Claude/CI)${NC}"
+fi
+
+# Check recent git log for merge commits to protected branches
+current_branch=$(git symbolic-ref --short HEAD)
+target_branch=""
+
+# Parse push arguments to find target branch
+while read local_ref local_sha remote_ref remote_sha; do
+  if [[ "$remote_ref" == "refs/heads/master" ]]; then
+    target_branch="master"
+  elif [[ "$remote_ref" == "refs/heads/develop" ]]; then
+    target_branch="develop"
+  fi
+done
+
+# Validate protected branches
+if [ "$target_branch" = "master" ] || [ "$target_branch" = "develop" ]; then
+  # Check if this is a direct push (not via PR)
+  if [ "$current_branch" = "$target_branch" ]; then
+    echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${RED}🚫 BLOCKED: Direct push to ${target_branch} is not allowed!${NC}"
+    echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo -e "${YELLOW}Required workflow:${NC}"
+    echo "  1. Create a feature branch"
+    echo "  2. Push feature branch"
+    echo "  3. Create PR with: gh pr create"
+    echo "  4. Wait for manual approval"
+    echo ""
+    exit 1
+  fi
+fi
+
+# Warning about PR merging (can't block gh pr merge directly, but can warn)
+if grep -q "gh pr merge" .git/hooks/pre-commit 2>/dev/null; then
+  echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "${RED}⚠️  WARNING: PR merge detected in commit hooks${NC}"
+  echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo ""
+  echo -e "${YELLOW}REMINDER:${NC}"
+  echo "  - Claude Code should CREATE PRs only"
+  echo "  - Claude Code should NOT merge PRs"
+  echo "  - User must review and merge manually"
+  echo ""
+fi
+
+# All good
+echo -e "${GREEN}✓ Push validation passed${NC}"
+exit 0

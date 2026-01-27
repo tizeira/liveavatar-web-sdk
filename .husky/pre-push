@@ -19,3 +19,6 @@ if [ "$remote" = "upstream" ]; then
   echo "   Use 'origin' (your fork) instead."
   exit 1
 fi
+
+# Validate PR workflow (no direct push to master/develop)
+.husky/validate-pr-workflow || exit 1

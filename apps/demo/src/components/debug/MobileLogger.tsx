@@ -23,6 +23,9 @@ export const MobileLogger: React.FC<MobileLoggerProps> = ({
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [isMinimized, setIsMinimized] = useState(false);
   const [isVisible, setIsVisible] = useState(true);
+  const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "failed">(
+    "idle",
+  );
   const logIdRef = useRef(0);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -124,6 +127,12 @@ export const MobileLogger: React.FC<MobileLoggerProps> = ({
   };
 
   const copyAllLogs = async () => {
+    if (logs.length === 0) {
+      setCopyStatus("failed");
+      setTimeout(() => setCopyStatus("idle"), 1500);
+      return;
+    }
+
     const logText = logs
       .map(
         (log) =>
@@ -131,28 +140,51 @@ export const MobileLogger: React.FC<MobileLoggerProps> = ({
       )
       .join("\n");
 
-    try {
-      await navigator.clipboard.writeText(logText);
-      // Visual feedback
-      const btn = document.getElementById("copy-logs-btn");
-      if (btn) {
-        const originalText = btn.textContent;
-        btn.textContent = "Copied!";
-        setTimeout(() => {
-          btn.textContent = originalText;
-        }, 1500);
+    let success = false;
+
+    // Method 1: Modern Clipboard API
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      try {
+        await navigator.clipboard.writeText(logText);
+        success = true;
+      } catch {
+        // Will try fallback
       }
-    } catch {
-      // Fallback for mobile browsers that don't support clipboard API
-      const textarea = document.createElement("textarea");
-      textarea.value = logText;
-      textarea.style.position = "fixed";
-      textarea.style.left = "-9999px";
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand("copy");
-      document.body.removeChild(textarea);
     }
+
+    // Method 2: Fallback for mobile browsers
+    if (!success) {
+      try {
+        const textarea = document.createElement("textarea");
+        textarea.value = logText;
+        textarea.style.position = "fixed";
+        textarea.style.top = "0";
+        textarea.style.left = "0";
+        textarea.style.width = "2em";
+        textarea.style.height = "2em";
+        textarea.style.padding = "0";
+        textarea.style.border = "none";
+        textarea.style.outline = "none";
+        textarea.style.boxShadow = "none";
+        textarea.style.background = "transparent";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+
+        // iOS specific: setSelectionRange
+        textarea.setSelectionRange(0, logText.length);
+
+        success = document.execCommand("copy");
+        document.body.removeChild(textarea);
+      } catch {
+        success = false;
+      }
+    }
+
+    // Update status with visual feedback
+    setCopyStatus(success ? "copied" : "failed");
+    setTimeout(() => setCopyStatus("idle"), 2000);
   };
 
   return (
@@ -170,11 +202,20 @@ export const MobileLogger: React.FC<MobileLoggerProps> = ({
         </span>
         <div className="flex gap-2">
           <button
-            id="copy-logs-btn"
             onClick={copyAllLogs}
-            className="px-2 py-1 bg-blue-500/30 rounded text-[9px] hover:bg-blue-500/50"
+            className={`px-2 py-1 rounded text-[9px] transition-colors ${
+              copyStatus === "copied"
+                ? "bg-green-500/50 text-green-100"
+                : copyStatus === "failed"
+                  ? "bg-red-500/50 text-red-100"
+                  : "bg-blue-500/30 hover:bg-blue-500/50"
+            }`}
           >
-            Copy All
+            {copyStatus === "copied"
+              ? "✓ Copied!"
+              : copyStatus === "failed"
+                ? "✗ Failed"
+                : "Copy All"}
           </button>
           <button
             onClick={() => setLogs([])}

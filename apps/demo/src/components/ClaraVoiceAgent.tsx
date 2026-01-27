@@ -39,6 +39,9 @@ import { Phone, PhoneOff, Mic, MicOff, Loader2, Clock } from "lucide-react";
 // Toast notifications
 import { toast } from "sonner";
 
+// Debug component for mobile
+import { MobileLogger } from "./debug/MobileLogger";
+
 // ============================================
 // DEVICE DETECTION (runtime, not module-level)
 // ============================================
@@ -63,16 +66,28 @@ const SESSION_WARNING_SECONDS = 30;
 // SMART INTERRUPTION CONFIGURATION
 // ============================================
 // Filter out noise and brief sounds from triggering interruptions
-// ElevenLabs sends vad_score events with voice confidence (0-1)
-
-// Minimum speech duration before allowing interruption (prevents noise triggers)
-const MIN_SPEECH_DURATION_MS = 800; // ~1 second of real speech required
+// NOTE: onInterruption now trusts ElevenLabs detection directly (no filtering)
+// These constants are only used in onUserTranscript for late transcript detection
 
 // Minimum VAD score to consider valid speech (0-1 range from ElevenLabs)
 const MIN_VAD_SCORE_FOR_INTERRUPT = 0.5;
 
-// Enable/disable smart interruption filtering (set false for original behavior)
+// Enable/disable smart interruption filtering in onUserTranscript (set false for original behavior)
 const SMART_INTERRUPTION_ENABLED = true;
+
+// ============================================
+// INTERRUPT RACE CONDITION PROTECTION
+// ============================================
+// Time window after interrupt where we block sending audio to HeyGen
+// Prevents race condition where sendAllAudioToAvatar() continues after interrupt
+const INTERRUPT_BLOCK_WINDOW_MS = 500;
+
+// ============================================
+// AUDIO FADE-OUT CONFIGURATION
+// ============================================
+// Smooth fade-out when user interrupts (instead of abrupt cut)
+const AUDIO_FADE_ENABLED = true;
+const AUDIO_FADE_DURATION_MS = 250; // 200-300ms recommended
 
 // ============================================
 // HYBRID AUDIO STRATEGY CONSTANTS
@@ -507,6 +522,10 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
   const reportAudioSentRef = useRef<(() => void) | null>(null);
   const reportAvatarStartedRef = useRef<(() => void) | null>(null);
 
+  // Audio fade-out refs for smooth interruptions
+  const fadeInProgressRef = useRef(false);
+  const fadeIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
   // Calculate total samples in buffer (for mobile buffer limit check)
   // Used to prevent accumulating too much audio before processing
   const calculateBufferSamples = useCallback((chunks: string[]): number => {
@@ -518,6 +537,90 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
     // PCM 16-bit = 2 bytes per sample
     return Math.floor(totalBytes / 2);
   }, []);
+
+  // Fade out audio and then interrupt - provides smooth audio transition
+  const fadeOutAndInterrupt = useCallback(() => {
+    if (!AUDIO_FADE_ENABLED || !videoRef.current || !sessionRef.current) {
+      console.log("[FADE] Fade disabled or refs missing, immediate interrupt");
+      sessionRef.current?.interrupt();
+      return;
+    }
+
+    // Cancel any existing fade
+    if (fadeIntervalRef.current) {
+      clearInterval(fadeIntervalRef.current);
+      fadeIntervalRef.current = null;
+    }
+
+    console.log("[FADE] Starting fade-out with setInterval");
+
+    fadeInProgressRef.current = true;
+    const startVolume = videoRef.current.volume;
+    const startTime = Date.now();
+    const frameInterval = 16; // 60fps
+
+    // Immediate first frame
+    videoRef.current.volume = startVolume;
+
+    fadeIntervalRef.current = setInterval(() => {
+      try {
+        const elapsed = Date.now() - startTime;
+        const progress = Math.min(elapsed / AUDIO_FADE_DURATION_MS, 1);
+
+        console.log(
+          `[FADE] Frame: elapsed=${elapsed}ms, progress=${(progress * 100).toFixed(1)}%`,
+        );
+
+        // Ease-out quadratic for smooth deceleration
+        const eased = 1 - Math.pow(1 - progress, 2);
+        const newVolume = startVolume * (1 - eased);
+
+        if (videoRef.current) {
+          videoRef.current.volume = Math.max(0, newVolume);
+        } else {
+          console.warn("[FADE] videoRef.current is null during fade");
+        }
+
+        if (progress >= 1) {
+          // Fade complete - cleanup and interrupt
+          if (fadeIntervalRef.current) {
+            clearInterval(fadeIntervalRef.current);
+            fadeIntervalRef.current = null;
+          }
+
+          fadeInProgressRef.current = false;
+
+          // Restore volume for next response
+          if (videoRef.current) {
+            videoRef.current.volume = 1.0;
+          }
+
+          // NOW interrupt HeyGen
+          console.log("[FADE] Fade-out complete, calling interrupt()");
+          if (sessionRef.current) {
+            try {
+              sessionRef.current.interrupt();
+              console.log("[FADE] interrupt() executed successfully");
+            } catch (error) {
+              console.error("[FADE] Error calling interrupt():", error);
+            }
+          } else {
+            console.error(
+              "[FADE] sessionRef.current is null, cannot interrupt",
+            );
+          }
+        }
+      } catch (error) {
+        console.error("[FADE] Error in fade animation:", error);
+        // Cleanup on error
+        if (fadeIntervalRef.current) {
+          clearInterval(fadeIntervalRef.current);
+          fadeIntervalRef.current = null;
+        }
+        fadeInProgressRef.current = false;
+      }
+    }, frameInterval);
+  }, [sessionRef]);
 
   // Generate silence in PCM 16-bit signed, 24kHz mono format (base64)
   const generateSilence = useCallback((durationMs: number): string => {
@@ -660,11 +763,21 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       );
 
       for (let i = 0; i < chunks.length; i++) {
-        // Check if interrupted before sending next chunk
-        // (isSendingAudioRef is set to false when interruption occurs)
-        if (i > 0 && !isSendingAudioRef.current) {
+        // DOUBLE CHECK: Both flag AND timestamp-based interrupt detection
+        const timeSinceInterrupt = Date.now() - lastInterruptTimeRef.current;
+
+        // Check 1: Flag-based (set to false when interruption occurs)
+        if (!isSendingAudioRef.current && i > 0) {
           console.log(
-            `[AUDIO] Chunk send interrupted at ${i + 1}/${chunks.length} - stopping`,
+            `[SEND] ⛔ Chunk ${i + 1}/${chunks.length} stopped - isSendingAudioRef=false`,
+          );
+          break;
+        }
+
+        // Check 2: Timestamp-based (recent interrupt blocks all sends)
+        if (timeSinceInterrupt < INTERRUPT_BLOCK_WINDOW_MS) {
+          console.log(
+            `[SEND] ⛔ Chunk ${i + 1}/${chunks.length} blocked - interrupt ${timeSinceInterrupt}ms ago`,
           );
           break;
         }
@@ -672,9 +785,7 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
         const chunk = chunks[i]!;
         const sizeKB = Math.round((chunk.length * 0.75) / 1024);
 
-        console.log(
-          `[AUDIO] Sending chunk ${i + 1}/${chunks.length} (${sizeKB}KB)`,
-        );
+        console.log(`[SEND] ✅ Chunk ${i + 1}/${chunks.length} (${sizeKB}KB)`);
 
         // Report audio sent for latency tracking (only first chunk)
         if (i === 0) {
@@ -798,6 +909,16 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       );
 
       if (audioSizeBytes > MAX_AUDIO_SIZE_BYTES) {
+        // INTERRUPT CHECK: Verify no recent interrupt before chunked send
+        const timeSinceInterrupt = Date.now() - lastInterruptTimeRef.current;
+        if (timeSinceInterrupt < INTERRUPT_BLOCK_WINDOW_MS) {
+          console.log(
+            `[SEND] ⛔ BLOCKED large audio - recent interrupt (${timeSinceInterrupt}ms ago)`,
+          );
+          audioBufferRef.current = [];
+          return;
+        }
+
         console.log(
           `[AUDIO] Audio too large (${audioSizeKB}KB > ${Math.round(MAX_AUDIO_SIZE_BYTES / 1024)}KB), using smart chunking`,
         );
@@ -821,9 +942,19 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
         );
       }
 
-      // 6. Send ALL audio in a single call
+      // 6. INTERRUPT CHECK: Verify no recent interrupt before sending
+      const timeSinceInterrupt = Date.now() - lastInterruptTimeRef.current;
+      if (timeSinceInterrupt < INTERRUPT_BLOCK_WINDOW_MS) {
+        console.log(
+          `[SEND] ⛔ BLOCKED - recent interrupt (${timeSinceInterrupt}ms ago)`,
+        );
+        audioBufferRef.current = [];
+        return;
+      }
+
+      // 7. Send ALL audio in a single call
       console.log(
-        `[AUDIO] Sending complete audio (${totalSizeKB}KB) in single call`,
+        `[SEND] ✅ Sending complete audio (${totalSizeKB}KB) - ${timeSinceInterrupt}ms since last interrupt`,
       );
       try {
         // Report audio sent for latency tracking
@@ -1010,37 +1141,19 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       console.log("[AUDIO] Reset interrupt debounce for new response");
     },
     onInterruption: (vadInfo: VadInfo) => {
-      const { vadScore, speechDuration } = vadInfo;
-
-      // SMART INTERRUPTION FILTERING: Verify this is a real interruption
-      if (SMART_INTERRUPTION_ENABLED) {
-        // Check VAD score - must be above threshold for real speech
-        if (vadScore < MIN_VAD_SCORE_FOR_INTERRUPT) {
-          console.log(
-            `[AUDIO] Ignoring interruption - low VAD (${vadScore.toFixed(2)} < ${MIN_VAD_SCORE_FOR_INTERRUPT})`,
-          );
-          return;
-        }
-
-        // Check speech duration - must speak long enough to be intentional
-        if (speechDuration < MIN_SPEECH_DURATION_MS) {
-          console.log(
-            `[AUDIO] Ignoring interruption - speech too short (${speechDuration}ms < ${MIN_SPEECH_DURATION_MS}ms)`,
-          );
-          return;
-        }
-      }
-
-      // Valid interruption - proceed
+      // ElevenLabs confirmed user interrupted - trust their detection system
+      const interruptTime = Date.now();
+      console.log(`[INTERRUPT] ══════════════════════════════════════`);
+      console.log(`[INTERRUPT] Valid interruption at T=${interruptTime}`);
       console.log(
-        `[AUDIO] Valid interruption - VAD: ${vadScore.toFixed(2)}, Duration: ${speechDuration}ms`,
+        `[INTERRUPT] VAD: ${vadInfo.vadScore.toFixed(2)}, Duration: ${vadInfo.speechDuration}ms`,
       );
 
       // Set flag to add leading silence on next response (gives HeyGen time after interrupt)
       isAfterInterruptRef.current = true;
 
       // Record interrupt time for debounce (ignore ghost chunks)
-      lastInterruptTimeRef.current = Date.now();
+      lastInterruptTimeRef.current = interruptTime;
 
       // Clear buffer and stop gap detection
       if (gapCheckIntervalRef.current) {
@@ -1059,15 +1172,10 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       hassentImmediateRef.current = false; // Reset for next response
       isSendingAudioRef.current = false; // Reset sending state
 
-      // CRITICAL: Interrupt HeyGen avatar playback
-      if (sessionRef.current) {
-        try {
-          sessionRef.current.interrupt();
-          console.log("[AUDIO] HeyGen avatar interrupted");
-        } catch {
-          // Ignore interrupt errors (session may already be stopped)
-        }
-      }
+      // CRITICAL: Interrupt HeyGen avatar playback with smooth fade-out
+      console.log(`[INTERRUPT] Initiating fade-out and interrupt`);
+      fadeOutAndInterrupt();
+      console.log(`[INTERRUPT] ══════════════════════════════════════`);
     },
     onUserTranscript: (text, vadInfo) => {
       console.log("[AUDIO] User said:", text);
@@ -1129,14 +1237,8 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
         // Set flag for leading silence on next response
         isAfterInterruptRef.current = true;
 
-        // Interrupt HeyGen avatar playback
-        if (sessionRef.current) {
-          try {
-            sessionRef.current.interrupt();
-          } catch {
-            // Ignore interrupt errors
-          }
-        }
+        // Interrupt HeyGen avatar playback with smooth fade-out
+        fadeOutAndInterrupt();
       } else {
         // Avatar already finished - don't clear buffer, don't set debounce
         // Chunks arriving are from the NEW response being generated
@@ -1324,6 +1426,11 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       if (keepAliveIntervalRef.current) {
         clearInterval(keepAliveIntervalRef.current);
         keepAliveIntervalRef.current = null;
+      }
+      // Cleanup fade animation
+      if (fadeIntervalRef.current) {
+        clearInterval(fadeIntervalRef.current);
+        fadeIntervalRef.current = null;
       }
       // Clear audio buffer
       audioBufferRef.current = [];
@@ -1601,6 +1708,9 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
           <SessionWrapper onSessionStopped={handleSessionStopped} />
         </LiveAvatarContextProvider>
       )}
+
+      {/* Mobile Logger - persists across session lifecycle for debugging */}
+      <MobileLogger enabled={true} maxLogs={500} filter="" />
     </div>
   );
 };

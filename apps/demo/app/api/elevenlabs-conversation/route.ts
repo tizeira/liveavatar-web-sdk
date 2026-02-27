@@ -109,36 +109,51 @@ export async function POST(request: Request) {
     );
   }
 
-  logger.debug(
-    "ElevenLabs Conversation API called",
+  // === DIAGNOSTIC: Check API configuration ===
+  if (!ELEVENLABS_API_KEY) {
+    logger.error("[ELEVENLABS] API_KEY not configured", null, {
+      route: "/api/elevenlabs-conversation",
+    });
+    return new Response(
+      JSON.stringify({
+        error: "ElevenLabs API key not configured",
+        code: "ELEVENLABS_API_KEY_MISSING",
+        service: "elevenlabs",
+      }),
+      {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+  }
+
+  if (!agentId) {
+    logger.error("[ELEVENLABS] Agent ID not configured", null, {
+      route: "/api/elevenlabs-conversation",
+    });
+    return new Response(
+      JSON.stringify({
+        error: "ElevenLabs Agent ID not configured",
+        code: "ELEVENLABS_AGENT_ID_MISSING",
+        service: "elevenlabs",
+      }),
+      {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+  }
+
+  logger.info(
+    "[ELEVENLABS] Requesting signed URL",
     {
-      hasApiKey: !!ELEVENLABS_API_KEY,
       agentId,
+      hasApiKey: !!ELEVENLABS_API_KEY,
     },
     { route: "/api/elevenlabs-conversation" },
   );
 
   try {
-    if (!ELEVENLABS_API_KEY) {
-      return new Response(
-        JSON.stringify({ error: "ElevenLabs API key not configured" }),
-        {
-          status: 500,
-          headers: { "Content-Type": "application/json" },
-        },
-      );
-    }
-
-    if (!agentId) {
-      return new Response(
-        JSON.stringify({ error: "ElevenLabs Agent ID not configured" }),
-        {
-          status: 500,
-          headers: { "Content-Type": "application/json" },
-        },
-      );
-    }
-
     // Get signed URL from ElevenLabs Conversational AI API
     const res = await fetch(
       `https://api.elevenlabs.io/v1/convai/conversation/get-signed-url?agent_id=${agentId}`,
@@ -151,16 +166,81 @@ export async function POST(request: Request) {
     );
 
     if (!res.ok) {
-      const errorData = await res.text();
+      let errorMessage = "Failed to get signed URL";
+      let errorCode = "ELEVENLABS_UNKNOWN_ERROR";
+      let errorDetails: string | Record<string, unknown> = {};
+
+      try {
+        const errorText = await res.text();
+        errorDetails = errorText;
+
+        // Try to parse as JSON for structured errors
+        try {
+          const errorJson = JSON.parse(errorText);
+          if (errorJson.detail?.message) {
+            errorMessage = errorJson.detail.message;
+          } else if (errorJson.message) {
+            errorMessage = errorJson.message;
+          } else if (errorJson.error) {
+            errorMessage = errorJson.error;
+          }
+          errorDetails = errorJson;
+        } catch {
+          // Keep as text
+          errorMessage = errorText || errorMessage;
+        }
+
+        // Detect specific error types
+        const lowerMsg = errorMessage.toLowerCase();
+        if (lowerMsg.includes("subscription") || lowerMsg.includes("expired")) {
+          errorCode = "ELEVENLABS_SUBSCRIPTION_EXPIRED";
+        } else if (
+          lowerMsg.includes("credit") ||
+          lowerMsg.includes("quota") ||
+          lowerMsg.includes("limit")
+        ) {
+          errorCode = "ELEVENLABS_QUOTA_EXCEEDED";
+        } else if (
+          lowerMsg.includes("agent") &&
+          (lowerMsg.includes("not found") || lowerMsg.includes("invalid"))
+        ) {
+          errorCode = "ELEVENLABS_AGENT_NOT_FOUND";
+        } else if (
+          lowerMsg.includes("unauthorized") ||
+          lowerMsg.includes("invalid api")
+        ) {
+          errorCode = "ELEVENLABS_UNAUTHORIZED";
+        } else if (res.status === 401 || res.status === 403) {
+          errorCode = "ELEVENLABS_AUTH_FAILED";
+        } else if (res.status === 402) {
+          errorCode = "ELEVENLABS_PAYMENT_REQUIRED";
+        } else if (res.status === 404) {
+          errorCode = "ELEVENLABS_AGENT_NOT_FOUND";
+        }
+      } catch {
+        logger.warn("[ELEVENLABS] Could not parse error response", null, {
+          route: "/api/elevenlabs-conversation",
+        });
+      }
+
       logger.error(
-        "ElevenLabs API error",
-        { errorData, status: res.status },
+        `[ELEVENLABS] API Error: ${errorCode}`,
+        {
+          status: res.status,
+          statusText: res.statusText,
+          errorMessage,
+          errorCode,
+          agentId,
+          errorDetails,
+        },
         { route: "/api/elevenlabs-conversation" },
       );
+
       return new Response(
         JSON.stringify({
-          error: "Failed to get signed URL",
-          details: errorData,
+          error: errorMessage,
+          code: errorCode,
+          service: "elevenlabs",
         }),
         {
           status: res.status,
@@ -171,8 +251,8 @@ export async function POST(request: Request) {
 
     const data = await res.json();
     logger.info(
-      "ElevenLabs signed URL obtained",
-      { agentId },
+      "[ELEVENLABS] Signed URL obtained successfully",
+      { agentId, hasSignedUrl: !!data.signed_url },
       { route: "/api/elevenlabs-conversation" },
     );
 
@@ -187,12 +267,35 @@ export async function POST(request: Request) {
       },
     );
   } catch (error) {
-    logger.error("Failed to get signed URL", error, {
-      route: "/api/elevenlabs-conversation",
-    });
-    return new Response(JSON.stringify({ error: "Failed to get signed URL" }), {
-      status: 500,
-      headers: { "Content-Type": "application/json" },
-    });
+    const err = error as Error;
+    const isNetworkError =
+      err.message.includes("fetch") ||
+      err.message.includes("network") ||
+      err.message.includes("ECONNREFUSED") ||
+      err.message.includes("ETIMEDOUT");
+
+    logger.error(
+      `[ELEVENLABS] ${isNetworkError ? "Network error" : "Unexpected error"}`,
+      {
+        message: err.message,
+        name: err.name,
+        stack: err.stack?.split("\n").slice(0, 3).join(" | "),
+      },
+      { route: "/api/elevenlabs-conversation" },
+    );
+
+    return new Response(
+      JSON.stringify({
+        error: err.message,
+        code: isNetworkError
+          ? "ELEVENLABS_NETWORK_ERROR"
+          : "ELEVENLABS_UNEXPECTED_ERROR",
+        service: "elevenlabs",
+      }),
+      {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
   }
 }

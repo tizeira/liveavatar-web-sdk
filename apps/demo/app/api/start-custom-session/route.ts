@@ -110,66 +110,193 @@ export async function POST(request: Request) {
   // Select avatar based on device type
   const avatarId =
     deviceType === "desktop" ? AVATAR_ID_DESKTOP : AVATAR_ID_MOBILE;
+
+  // === DIAGNOSTIC: Check API configuration ===
+  if (!API_KEY) {
+    logger.error("[HEYGEN] API_KEY not configured", null, {
+      route: "/api/start-custom-session",
+    });
+    return new Response(
+      JSON.stringify({
+        error: "HeyGen API not configured",
+        code: "HEYGEN_API_KEY_MISSING",
+      }),
+      { status: 500, headers: { "Content-Type": "application/json" } },
+    );
+  }
+
   logger.info(
-    "Starting CUSTOM session",
-    { avatarId, deviceType },
+    "[HEYGEN] Starting CUSTOM session",
+    {
+      avatarId,
+      deviceType,
+      apiUrl: API_URL,
+      hasApiKey: !!API_KEY,
+    },
     { route: "/api/start-custom-session" },
   );
 
   try {
+    const heygenPayload = {
+      mode: "CUSTOM",
+      avatar_id: avatarId,
+    };
+
+    logger.debug("[HEYGEN] Request payload", heygenPayload, {
+      route: "/api/start-custom-session",
+    });
+
     const res = await fetch(`${API_URL}/v1/sessions/token`, {
       method: "POST",
       headers: {
         "X-API-KEY": API_KEY,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        mode: "CUSTOM",
-        avatar_id: avatarId,
-      }),
+      body: JSON.stringify(heygenPayload),
     });
+
     if (!res.ok) {
-      const error = await res.json();
-      if (error.error) {
-        const resp = await res.json();
-        const errorMessage =
-          resp.data[0].message ?? "Failed to retrieve session token";
-        return new Response(JSON.stringify({ error: errorMessage }), {
-          status: res.status,
+      let errorMessage = "Failed to retrieve session token";
+      let errorCode = "HEYGEN_UNKNOWN_ERROR";
+      let errorDetails: Record<string, unknown> = {};
+
+      try {
+        const errorData = await res.json();
+        errorDetails = errorData;
+
+        // Extract error message from various HeyGen response formats
+        if (errorData.data?.[0]?.message) {
+          errorMessage = errorData.data[0].message;
+        } else if (errorData.error) {
+          errorMessage =
+            typeof errorData.error === "string"
+              ? errorData.error
+              : JSON.stringify(errorData.error);
+        } else if (errorData.message) {
+          errorMessage = errorData.message;
+        }
+
+        // Detect specific error types for better diagnostics
+        const lowerMsg = errorMessage.toLowerCase();
+        if (lowerMsg.includes("subscription") || lowerMsg.includes("expired")) {
+          errorCode = "HEYGEN_SUBSCRIPTION_EXPIRED";
+        } else if (lowerMsg.includes("credit") || lowerMsg.includes("quota")) {
+          errorCode = "HEYGEN_QUOTA_EXCEEDED";
+        } else if (lowerMsg.includes("rate") || lowerMsg.includes("limit")) {
+          errorCode = "HEYGEN_RATE_LIMITED";
+        } else if (
+          lowerMsg.includes("avatar") ||
+          lowerMsg.includes("not found")
+        ) {
+          errorCode = "HEYGEN_AVATAR_NOT_FOUND";
+        } else if (
+          lowerMsg.includes("unauthorized") ||
+          lowerMsg.includes("invalid")
+        ) {
+          errorCode = "HEYGEN_UNAUTHORIZED";
+        } else if (res.status === 401 || res.status === 403) {
+          errorCode = "HEYGEN_AUTH_FAILED";
+        } else if (res.status === 402) {
+          errorCode = "HEYGEN_PAYMENT_REQUIRED";
+        }
+      } catch {
+        logger.warn("[HEYGEN] Could not parse error response body", null, {
+          route: "/api/start-custom-session",
         });
       }
 
-      return new Response(
-        JSON.stringify({ error: "Failed to retrieve session token" }),
+      logger.error(
+        `[HEYGEN] API Error: ${errorCode}`,
         {
           status: res.status,
+          statusText: res.statusText,
+          errorMessage,
+          errorCode,
+          avatarId,
+          errorDetails,
+        },
+        { route: "/api/start-custom-session" },
+      );
+
+      return new Response(
+        JSON.stringify({
+          error: errorMessage,
+          code: errorCode,
+          service: "heygen",
+        }),
+        {
+          status: res.status,
+          headers: { "Content-Type": "application/json" },
         },
       );
     }
+
     const data = await res.json();
-    logger.debug("Session token received", data, {
-      route: "/api/start-custom-session",
-    });
+    logger.info(
+      "[HEYGEN] Session created successfully",
+      {
+        sessionId: data.data?.session_id,
+        hasToken: !!data.data?.session_token,
+      },
+      {
+        route: "/api/start-custom-session",
+      },
+    );
 
     session_token = data.data.session_token;
     session_id = data.data.session_id;
   } catch (error: unknown) {
-    return new Response(JSON.stringify({ error: (error as Error).message }), {
-      status: 500,
-    });
+    const err = error as Error;
+    const isNetworkError =
+      err.message.includes("fetch") ||
+      err.message.includes("network") ||
+      err.message.includes("ECONNREFUSED") ||
+      err.message.includes("ETIMEDOUT");
+
+    logger.error(
+      `[HEYGEN] ${isNetworkError ? "Network error" : "Unexpected error"}`,
+      {
+        message: err.message,
+        name: err.name,
+        stack: err.stack?.split("\n").slice(0, 3).join(" | "),
+      },
+      { route: "/api/start-custom-session" },
+    );
+
+    return new Response(
+      JSON.stringify({
+        error: err.message,
+        code: isNetworkError
+          ? "HEYGEN_NETWORK_ERROR"
+          : "HEYGEN_UNEXPECTED_ERROR",
+        service: "heygen",
+      }),
+      {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
   }
 
   if (!session_token) {
+    logger.error("[HEYGEN] Empty session token received", null, {
+      route: "/api/start-custom-session",
+    });
     return new Response(
-      JSON.stringify({ error: "Failed to retrieve session token" }),
+      JSON.stringify({
+        error: "Failed to retrieve session token",
+        code: "HEYGEN_EMPTY_TOKEN",
+        service: "heygen",
+      }),
       {
         status: 500,
+        headers: { "Content-Type": "application/json" },
       },
     );
   }
 
   // === DATABASE TRACKING ===
-  // Track session in database for analytics
+  // Track session in database for analytics (non-blocking)
   try {
     await createSession({
       sessionToken: session_token,
@@ -177,20 +304,27 @@ export async function POST(request: Request) {
       userId: session?.user?.id,
       shopifyEmail: session?.user?.email || undefined,
     });
-    logger.info(
-      "Session tracked in database",
+    logger.debug(
+      "[DB] Session tracked",
+      { sessionId: session_id },
       {
-        sessionToken: session_token,
-        deviceType,
-        userEmail: session?.user?.email || "anonymous",
+        route: "/api/start-custom-session",
       },
-      { route: "/api/start-custom-session" },
     );
   } catch (dbError) {
     // Don't fail the request if DB tracking fails - just log it
-    logger.error("Failed to track session in database", dbError, {
-      route: "/api/start-custom-session",
-    });
+    const err = dbError as Error;
+    logger.warn(
+      "[DB] Failed to track session (non-critical)",
+      {
+        message: err.message,
+        name: err.name,
+        // Detect common Prisma/DB issues
+        isPrismaError: err.name?.includes("Prisma"),
+        isConnectionError: err.message?.includes("connect"),
+      },
+      { route: "/api/start-custom-session" },
+    );
   }
 
   return new Response(JSON.stringify({ session_token, session_id }), {

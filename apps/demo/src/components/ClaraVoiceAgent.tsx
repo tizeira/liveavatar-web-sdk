@@ -20,17 +20,6 @@ import {
   VadInfo,
 } from "../hooks";
 
-// shadcn/ui components
-import { Button } from "./ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "./ui/card";
-import { Badge } from "./ui/badge";
-import { Skeleton } from "./ui/skeleton";
 import Image from "next/image";
 
 // Lucide icons
@@ -215,98 +204,68 @@ const StatusIndicator: React.FC<StatusIndicatorProps> = ({
 
     if (isMuted) {
       return (
-        <Badge className="status-badge glass-morphism-strong bg-red-500/90 text-gray-900 border-red-400/40 hover:bg-red-500 shadow-lg">
-          <MicOff className="w-3 h-3 mr-1" />
-          <span className="font-medium">Silenciado</span>
-        </Badge>
+        <div className="status-badge status-badge-dark flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium">
+          <MicOff className="w-3 h-3 text-red-400" />
+          <span>Silenciado</span>
+        </div>
       );
     }
 
     if (isListening) {
       return (
-        <Badge className="status-badge glass-morphism-strong bg-emerald-500/90 text-gray-900 border-emerald-400/40 status-pulse hover:bg-emerald-500 shadow-lg">
-          <div className="voice-wave text-gray-900 mr-1">
+        <div className="status-badge status-badge-cyan flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium status-pulse">
+          <div className="voice-wave mr-0.5">
             <span></span>
             <span></span>
             <span></span>
             <span></span>
           </div>
-          <span className="font-medium">Escuchando</span>
-        </Badge>
+          <span>Escuchando</span>
+        </div>
       );
     }
 
     if (isThinking) {
       return (
-        <Badge className="status-badge glass-morphism-strong bg-amber-500/90 text-gray-900 border-amber-400/40 hover:bg-amber-500 shadow-lg">
-          <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-          <span className="font-medium">Pensando</span>
-        </Badge>
+        <div className="status-badge status-badge-dark flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium">
+          <Loader2
+            className="w-3 h-3 animate-spin"
+            style={{ color: "rgba(0,200,255,0.9)" }}
+          />
+          <span>Pensando</span>
+        </div>
       );
     }
 
     if (isSpeaking) {
       return (
-        <Badge className="status-badge glass-morphism-strong bg-blue-500/90 text-gray-900 border-blue-400/40 hover:bg-blue-500 shadow-lg">
-          <div className="voice-wave text-gray-900 mr-1">
+        <div className="status-badge status-badge-cyan flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium">
+          <div className="voice-wave mr-0.5">
             <span></span>
             <span></span>
             <span></span>
             <span></span>
           </div>
-          <span className="font-medium">Respondiendo</span>
-        </Badge>
+          <span>Respondiendo</span>
+        </div>
       );
     }
 
     return (
-      <Badge className="status-badge badge-ios hover:bg-white/40 shadow-md">
+      <div className="status-badge status-badge-dark flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium">
         <div
-          className={`connection-dot ${connectionQuality === ConnectionQuality.GOOD ? "good" : connectionQuality === ConnectionQuality.BAD ? "bad" : "unknown"} dot-pulse mr-1`}
+          className={`connection-dot ${connectionQuality === ConnectionQuality.GOOD ? "good" : connectionQuality === ConnectionQuality.BAD ? "bad" : "unknown"} dot-pulse`}
         />
-        <span className="font-medium text-neutral-700">Conectado</span>
-      </Badge>
+        <span>Conectado</span>
+      </div>
     );
   };
 
-  return <div className="absolute top-4 left-4 z-10">{getStatusContent()}</div>;
+  return <div className="absolute top-4 left-4 z-20">{getStatusContent()}</div>;
 };
 
 // ============================================
-// VOICE CONTROLS COMPONENT (shadcn/ui redesign)
-// ============================================
-interface VoiceControlsProps {
-  isMuted: boolean;
-  isActive: boolean;
-  onToggleMute: () => void;
-}
-
-const VoiceControls: React.FC<VoiceControlsProps> = ({
-  isMuted,
-  isActive,
-  onToggleMute,
-}) => {
-  if (!isActive) return null;
-
-  return (
-    <Button
-      onClick={onToggleMute}
-      variant="ghost"
-      size="icon"
-      className={`floating-glass rounded-full w-12 h-12 transition-all duration-300 ${
-        isMuted
-          ? "bg-red-500/90 hover:bg-red-500 text-gray-900 border-red-400/40 shadow-xl"
-          : "glass-morphism-dark text-gray-900 border-white/20 shadow-lg"
-      }`}
-      title={isMuted ? "Activar micrófono" : "Silenciar"}
-    >
-      {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-    </Button>
-  );
-};
-
-// ============================================
-// LANDING SCREEN COMPONENT (shadcn/ui redesign)
+// LANDING SCREEN COMPONENT (futuristic redesign)
 // ============================================
 interface LandingScreenProps {
   onStartCall: () => void;
@@ -328,101 +287,96 @@ const LandingScreen: React.FC<LandingScreenProps> = ({
   const displayName = customerData?.firstName || userName;
 
   return (
-    <div className="flex-1 w-full flex flex-col items-center justify-center p-6 landing-gradient min-h-screen">
-      <Card className="max-w-sm w-full card-ios border-0 shadow-2xl relative z-10">
-        <CardHeader className="text-center pb-2">
-          {/* Clara Avatar */}
-          <div className="avatar-ring-ios mx-auto mb-4">
-            <div className="h-20 w-20 rounded-full glass-morphism-strong flex items-center justify-center overflow-hidden p-3">
-              <Image
-                src="/images/clara-logo.png"
-                alt="Clara Logo"
-                width={80}
-                height={80}
-                className="w-full h-full object-contain"
-              />
-            </div>
-          </div>
+    <div className="futuristic-landing flex-1 w-full flex flex-col items-center justify-center px-8 min-h-screen relative">
+      {/* Clara glassmorphic orb */}
+      <div className="clara-orb mb-8 relative z-10">
+        <Image
+          src="/images/clara-logo.png"
+          alt="Clara Logo"
+          width={90}
+          height={90}
+          className="object-contain relative z-10"
+          style={{ filter: "drop-shadow(0 2px 8px rgba(120,160,255,0.3))" }}
+        />
+      </div>
 
-          {/* Badge */}
-          <div className="badge-ios mx-auto mb-3 text-neutral-800">
-            <span
-              className="w-2 h-2 rounded-full animate-pulse"
-              style={{ backgroundColor: "var(--platinum-600)" }}
+      {/* Text */}
+      <h1 className="text-3xl font-bold text-gray-900 mb-3 text-center relative z-10">
+        {displayName ? `Hola, ${displayName}!` : "Hola!"}
+      </h1>
+      <p className="text-base text-gray-500 text-center max-w-xs mb-10 relative z-10 leading-relaxed">
+        Soy Clara, tu asistente de belleza personal. Estoy aquí para ayudarte a
+        encontrar los productos perfectos para ti.
+      </p>
+
+      {/* CTA button */}
+      <button
+        onClick={onStartCall}
+        disabled={isLoading || isRateLimited}
+        className="btn-neon-connect w-72 h-14 flex items-center justify-center gap-3 text-base relative z-10"
+      >
+        {isLoading ? (
+          <>
+            <div
+              className="w-5 h-5 rounded-full border-2 border-cyan-300/40 border-t-cyan-400 animate-spin flex-shrink-0"
+              style={{ borderTopColor: "rgba(0,200,255,0.9)" }}
             />
-            Clara Skin Care Assistant
-          </div>
-
-          <CardTitle className="text-2xl font-bold text-neutral-800">
-            {displayName ? `Hola, ${displayName}!` : "Hola!"}
-          </CardTitle>
-          <CardDescription className="text-base mt-2 text-neutral-600">
-            Soy Clara, tu asistente de belleza personal. Estoy aquí para
-            ayudarte a encontrar los productos perfectos para ti.
-          </CardDescription>
-        </CardHeader>
-
-        <CardContent className="pt-4">
-          <Button
-            onClick={onStartCall}
-            disabled={isLoading || isRateLimited}
-            size="lg"
-            className="btn-ios-primary"
-          >
-            {isLoading ? (
-              <>
-                <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-                Conectando...
-              </>
-            ) : isRateLimited ? (
-              <>
-                <Clock className="w-5 h-5 mr-2" />
-                Espera {rateLimitCountdown}s
-              </>
-            ) : (
-              <>
-                <Phone className="w-5 h-5 mr-2" />
-                Iniciar Conversación
-              </>
-            )}
-          </Button>
-        </CardContent>
-      </Card>
+            <span>Conectando...</span>
+          </>
+        ) : isRateLimited ? (
+          <>
+            <Clock className="w-5 h-5 flex-shrink-0" />
+            <span>Espera {rateLimitCountdown}s</span>
+          </>
+        ) : (
+          <>
+            <Phone className="w-5 h-5 flex-shrink-0" />
+            <span>Iniciar Conversación</span>
+          </>
+        )}
+      </button>
     </div>
   );
 };
 
 // ============================================
-// CONNECTING SCREEN COMPONENT (shadcn/ui redesign)
+// CONNECTING SCREEN COMPONENT (futuristic redesign)
 // ============================================
 const ConnectingScreen: React.FC = () => {
   return (
-    <div className="flex-1 w-full flex flex-col items-center justify-center p-6 landing-gradient min-h-screen">
-      <Card className="max-w-sm w-full card-ios border-0 shadow-2xl relative z-10">
-        <CardContent className="pt-8 pb-8 text-center">
-          <div className="relative w-20 h-20 mx-auto mb-6">
-            <Skeleton className="w-20 h-20 rounded-full glass-morphism-subtle" />
-            <div className="absolute inset-0 flex items-center justify-center">
-              <Loader2
-                className="w-8 h-8 animate-spin"
-                style={{ color: "var(--platinum-700)" }}
-              />
-            </div>
-          </div>
-          <h2 className="text-xl font-semibold text-neutral-800 mb-2">
-            Conectando...
-          </h2>
-          <p className="text-neutral-600 text-sm font-medium">
-            Preparando a Clara
-          </p>
-        </CardContent>
-      </Card>
+    <div className="futuristic-landing flex-1 w-full flex flex-col items-center justify-center px-8 min-h-screen relative">
+      {/* Clara orb in loading pulse */}
+      <div
+        className="clara-orb mb-8 relative z-10"
+        style={{ animation: "orb-shimmer 2s ease-in-out infinite" }}
+      >
+        <Loader2
+          className="w-12 h-12 animate-spin relative z-10"
+          style={{ color: "rgba(0,180,255,0.8)" }}
+        />
+      </div>
+
+      <h2 className="text-3xl font-bold text-gray-900 mb-3 text-center relative z-10">
+        Conectando...
+      </h2>
+      <p className="text-base text-gray-500 text-center max-w-xs mb-10 relative z-10 leading-relaxed">
+        Preparando a Clara para ti
+      </p>
+
+      {/* Disabled loading button */}
+      <div className="btn-neon-connect w-72 h-14 flex items-center justify-center gap-3 text-base relative z-10 opacity-70 cursor-not-allowed">
+        <div
+          className="w-5 h-5 rounded-full border-2 border-cyan-300/40 border-t-cyan-400 animate-spin flex-shrink-0"
+          style={{ borderTopColor: "rgba(0,200,255,0.9)" }}
+        />
+        <span>Preparando...</span>
+      </div>
     </div>
   );
 };
 
 // ============================================
-// AVATAR VIDEO COMPONENT
+// AVATAR VIDEO COMPONENT (fullscreen, edge-to-edge)
 // ============================================
 interface AvatarVideoProps {
   videoRef: React.RefObject<HTMLVideoElement | null>;
@@ -434,10 +388,10 @@ const AvatarVideo: React.FC<AvatarVideoProps> = ({
   isStreamReady,
 }) => {
   return (
-    <div className="avatar-container rounded-2xl overflow-hidden shadow-2xl">
+    <>
       {!isStreamReady && (
-        <div className="avatar-placeholder flex items-center justify-center">
-          <div className="spinner w-8 h-8" />
+        <div className="absolute inset-0 flex items-center justify-center bg-black z-10">
+          <div className="spinner w-10 h-10" />
         </div>
       )}
       <video
@@ -445,9 +399,9 @@ const AvatarVideo: React.FC<AvatarVideoProps> = ({
         autoPlay
         playsInline
         muted={false}
-        className={`w-full h-full object-cover transition-opacity duration-500 ${isStreamReady ? "opacity-100" : "opacity-0"}`}
+        className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-700 ${isStreamReady ? "opacity-100" : "opacity-0"}`}
       />
-    </div>
+    </>
   );
 };
 
@@ -460,7 +414,6 @@ interface ConnectedSessionProps {
 
 const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const { isDesktop } = useScreenSize();
   const { fixedHeight, isInIframe } = useFixedHeight();
   const [isMuted, setIsMuted] = useState(false);
 
@@ -1441,7 +1394,7 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
 
   return (
     <div
-      className="flex-1 flex flex-col items-center justify-center relative safe-area-all w-full"
+      className="fixed inset-0 z-0 bg-black overflow-hidden"
       style={containerStyle}
     >
       {/* Session expiry warning */}
@@ -1451,62 +1404,60 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
 
       {/* Error display */}
       {agentError && (
-        <div className="absolute top-4 left-4 right-4 z-50 bg-red-100 border border-red-300 text-red-700 px-4 py-3 rounded-lg text-sm">
+        <div className="absolute top-16 left-4 right-4 z-50 bg-black/70 border border-red-500/50 text-white px-4 py-3 rounded-xl text-sm backdrop-blur-sm">
           {agentError}
         </div>
       )}
 
-      {/* Main content area */}
-      <div className="flex-1 flex items-center justify-center relative p-4 md:p-6 w-full">
-        {/* Avatar container */}
-        <div
-          className={`
-          relative h-full
-          ${
-            isDesktop
-              ? "max-w-4xl w-full aspect-video"
-              : "max-w-sm w-full aspect-[9/16] md:aspect-[3/4]"
-          }
-        `}
-        >
-          {/* Status indicator */}
-          <StatusIndicator
-            isConnected={isStreamReady && isAgentConnected}
-            isListening={isListening}
-            isThinking={isThinking}
-            isSpeaking={isSpeaking}
-            isMuted={isMuted}
-            connectionQuality={connectionQuality}
-          />
+      {/* Fullscreen video layer */}
+      <div className="absolute inset-0">
+        <AvatarVideo videoRef={videoRef} isStreamReady={isStreamReady} />
+      </div>
 
-          {/* Avatar video */}
-          <AvatarVideo videoRef={videoRef} isStreamReady={isStreamReady} />
+      {/* HUD grid overlay */}
+      <div className="hud-grid-overlay absolute inset-0 pointer-events-none z-10" />
 
-          {/* Controls overlay */}
-          <div className="controls-overlay rounded-b-2xl">
-            <div className="flex items-center justify-between gap-4">
-              {/* Voice control */}
-              <VoiceControls
-                isMuted={isMuted}
-                isActive={isAgentConnected}
-                onToggleMute={handleToggleMute}
-              />
+      {/* Status indicator - top left floating */}
+      <StatusIndicator
+        isConnected={isStreamReady && isAgentConnected}
+        isListening={isListening}
+        isThinking={isThinking}
+        isSpeaking={isSpeaking}
+        isMuted={isMuted}
+        connectionQuality={connectionQuality}
+      />
 
-              {/* End call button */}
-              <Button
-                onClick={onEndCall}
-                variant="destructive"
-                size="lg"
-                className="flex items-center gap-2 flex-1 max-w-xs justify-center floating-glass glass-morphism-strong bg-red-500/95 hover:bg-red-500 border border-red-400/40 shadow-xl transition-all duration-300 text-gray-900"
-              >
-                <PhoneOff className="w-5 h-5" />
-                <span className="font-medium">Finalizar</span>
-              </Button>
+      {/* Bottom controls - floating above video */}
+      <div
+        className="absolute bottom-0 left-0 right-0 z-20 flex flex-col items-center px-8"
+        style={{
+          paddingBottom: "max(2.5rem, env(safe-area-inset-bottom, 0px) + 1rem)",
+        }}
+      >
+        <div className="flex items-center justify-center gap-4 w-full max-w-sm">
+          {/* Mute toggle - floating glass circle */}
+          {isAgentConnected && (
+            <button
+              onClick={handleToggleMute}
+              className={`btn-mute-dark rounded-full w-12 h-12 flex items-center justify-center flex-shrink-0 ${isMuted ? "muted" : ""}`}
+              title={isMuted ? "Activar micrófono" : "Silenciar"}
+            >
+              {isMuted ? (
+                <MicOff className="w-5 h-5 text-white" />
+              ) : (
+                <Mic className="w-5 h-5 text-white" />
+              )}
+            </button>
+          )}
 
-              {/* Spacer for symmetry */}
-              {isAgentConnected && <div className="w-11" />}
-            </div>
-          </div>
+          {/* End call button - neon red pill */}
+          <button
+            onClick={onEndCall}
+            className="btn-neon-end flex-1 h-12 flex items-center justify-center gap-2 text-sm"
+          >
+            <PhoneOff className="w-4 h-4 flex-shrink-0" />
+            <span className="font-medium">Finalizar</span>
+          </button>
         </div>
       </div>
     </div>
@@ -1672,7 +1623,7 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
 
   return (
     <div
-      className="w-full h-full min-h-screen flex flex-col items-center justify-center bg-slate-50"
+      className="w-full h-full min-h-screen flex flex-col items-center justify-center"
       style={containerStyle}
     >
       {error && (

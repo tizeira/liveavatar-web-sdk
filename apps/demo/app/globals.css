@@ -960,3 +960,297 @@
 .text-pretty {
   text-wrap: pretty;
 }
+
+/* ============================================
+   FUTURISTIC REDESIGN SYSTEM
+   Edge-to-edge immersive AI assistant UI
+   ============================================ */
+
+/* Landing background - clean white with subtle blue haze */
+.futuristic-landing {
+  position: relative;
+  background: linear-gradient(160deg, #f8faff 0%, #f2f6ff 40%, #f8f5ff 100%);
+  overflow: hidden;
+}
+
+.futuristic-landing::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(
+      ellipse 700px 500px at 20% 0%,
+      rgba(180, 210, 255, 0.25) 0%,
+      transparent 70%
+    ),
+    radial-gradient(
+      ellipse 500px 400px at 80% 100%,
+      rgba(210, 180, 255, 0.18) 0%,
+      transparent 70%
+    ),
+    radial-gradient(
+      ellipse 600px 600px at 50% 50%,
+      rgba(200, 230, 255, 0.1) 0%,
+      transparent 80%
+    );
+  animation: futuristic-bg-shift 30s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes futuristic-bg-shift {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  33% {
+    transform: translate(10px, -15px) scale(1.02);
+  }
+  66% {
+    transform: translate(-8px, 12px) scale(0.99);
+  }
+}
+
+/* Glassmorphic orb for landing screen */
+.clara-orb {
+  width: 160px;
+  height: 160px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 35% 32%,
+    rgba(255, 255, 255, 0.98) 0%,
+    rgba(240, 248, 255, 0.92) 35%,
+    rgba(210, 232, 255, 0.82) 65%,
+    rgba(225, 210, 255, 0.7) 100%
+  );
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  border: 1.5px solid rgba(255, 255, 255, 0.85);
+  box-shadow:
+    0 0 50px rgba(120, 180, 255, 0.22),
+    0 0 100px rgba(180, 130, 255, 0.12),
+    0 20px 60px rgba(0, 0, 0, 0.07),
+    inset 0 1px 2px rgba(255, 255, 255, 1),
+    inset 0 -2px 8px rgba(180, 210, 255, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Subtle circuit/grid texture inside the orb */
+.clara-orb::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background-image:
+    linear-gradient(rgba(150, 200, 255, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(150, 200, 255, 0.08) 1px, transparent 1px);
+  background-size: 20px 20px;
+  pointer-events: none;
+}
+
+/* Orb shimmer animation */
+.clara-orb::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 25% 25%,
+    rgba(255, 255, 255, 0.6) 0%,
+    rgba(255, 255, 255, 0.15) 40%,
+    transparent 65%
+  );
+  animation: orb-shimmer 4s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes orb-shimmer {
+  0%,
+  100% {
+    opacity: 0.8;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.03);
+  }
+}
+
+/* Neon CYAN button - for connect/start actions */
+.btn-neon-connect {
+  position: relative;
+  border-radius: 50px;
+  padding: 0 2rem;
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.55) 0%,
+    rgba(240, 250, 255, 0.45) 100%
+  );
+  border: 1.5px solid rgba(0, 200, 255, 0.7);
+  box-shadow:
+    0 0 14px rgba(0, 200, 255, 0.45),
+    0 0 28px rgba(0, 180, 255, 0.2),
+    0 4px 16px rgba(0, 0, 0, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  color: #1a2a3a;
+  font-weight: 500;
+  transition: all 0.25s ease;
+  overflow: hidden;
+}
+
+.btn-neon-connect::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50px;
+  background: linear-gradient(
+    135deg,
+    rgba(0, 220, 255, 0.08) 0%,
+    rgba(0, 180, 255, 0.04) 100%
+  );
+  pointer-events: none;
+}
+
+.btn-neon-connect:hover:not(:disabled) {
+  border-color: rgba(0, 220, 255, 0.9);
+  box-shadow:
+    0 0 20px rgba(0, 220, 255, 0.65),
+    0 0 40px rgba(0, 200, 255, 0.3),
+    0 6px 20px rgba(0, 0, 0, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  transform: translateY(-1px);
+}
+
+.btn-neon-connect:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow:
+    0 0 10px rgba(0, 200, 255, 0.35),
+    0 0 20px rgba(0, 180, 255, 0.15),
+    inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+.btn-neon-connect:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  box-shadow:
+    0 0 8px rgba(0, 200, 255, 0.25),
+    0 0 16px rgba(0, 180, 255, 0.12);
+}
+
+/* Neon RED button - for end call / finalizar */
+.btn-neon-end {
+  position: relative;
+  border-radius: 50px;
+  padding: 0 2rem;
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  background: linear-gradient(
+    135deg,
+    rgba(30, 15, 15, 0.55) 0%,
+    rgba(40, 10, 10, 0.45) 100%
+  );
+  border: 1.5px solid rgba(239, 60, 60, 0.8);
+  box-shadow:
+    0 0 16px rgba(239, 68, 68, 0.6),
+    0 0 32px rgba(220, 38, 38, 0.3),
+    0 4px 20px rgba(0, 0, 0, 0.2),
+    inset 0 1px 0 rgba(255, 120, 120, 0.2);
+  color: #fff;
+  font-weight: 500;
+  transition: all 0.25s ease;
+  overflow: hidden;
+}
+
+.btn-neon-end::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50px;
+  background: linear-gradient(
+    135deg,
+    rgba(255, 80, 80, 0.1) 0%,
+    rgba(220, 38, 38, 0.05) 100%
+  );
+  pointer-events: none;
+}
+
+.btn-neon-end:hover {
+  border-color: rgba(239, 68, 68, 1);
+  box-shadow:
+    0 0 22px rgba(239, 68, 68, 0.8),
+    0 0 44px rgba(220, 38, 38, 0.4),
+    0 6px 24px rgba(0, 0, 0, 0.25),
+    inset 0 1px 0 rgba(255, 140, 140, 0.25);
+  transform: translateY(-1px);
+}
+
+.btn-neon-end:active {
+  transform: translateY(0);
+}
+
+/* HUD (Heads-Up Display) grid overlay for video */
+.hud-grid-overlay {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.045) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: radial-gradient(
+    ellipse 90% 90% at 50% 50%,
+    black 40%,
+    transparent 100%
+  );
+  -webkit-mask-image: radial-gradient(
+    ellipse 90% 90% at 50% 50%,
+    black 40%,
+    transparent 100%
+  );
+}
+
+/* Mute button for dark video overlay */
+.btn-mute-dark {
+  backdrop-filter: blur(16px) saturate(150%);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  box-shadow:
+    0 4px 16px rgba(0, 0, 0, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.15);
+  transition: all 0.25s ease;
+}
+
+.btn-mute-dark:hover {
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
+.btn-mute-dark.muted {
+  background: rgba(239, 68, 68, 0.25);
+  border-color: rgba(239, 68, 68, 0.6);
+  box-shadow:
+    0 0 12px rgba(239, 68, 68, 0.4),
+    0 4px 16px rgba(0, 0, 0, 0.2),
+    inset 0 1px 0 rgba(255, 120, 120, 0.15);
+}
+
+/* Status badge for dark video overlay */
+.status-badge-dark {
+  backdrop-filter: blur(16px) saturate(150%);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: white;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.2);
+}
+
+/* Blue neon status for listening/speaking on dark bg */
+.status-badge-cyan {
+  background: rgba(0, 180, 255, 0.2);
+  border: 1px solid rgba(0, 200, 255, 0.5);
+  color: rgba(200, 240, 255, 1);
+  box-shadow: 0 0 10px rgba(0, 200, 255, 0.25);
+}

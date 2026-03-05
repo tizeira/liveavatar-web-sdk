@@ -400,7 +400,7 @@ const AvatarVideo: React.FC<AvatarVideoProps> = ({
         playsInline
         muted={false}
         className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-700 ${isStreamReady ? "opacity-100" : "opacity-0"}`}
-        style={{ objectPosition: "45% center" }}
+        style={{ objectPosition: "42.5% center" }}
       />
     </>
   );

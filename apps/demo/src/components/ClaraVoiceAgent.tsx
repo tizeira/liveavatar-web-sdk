@@ -400,6 +400,7 @@ const AvatarVideo: React.FC<AvatarVideoProps> = ({
         playsInline
         muted={false}
         className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-700 ${isStreamReady ? "opacity-100" : "opacity-0"}`}
+        style={{ objectPosition: "25% center" }}
       />
     </>
   );
@@ -1413,9 +1414,6 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       <div className="absolute inset-0">
         <AvatarVideo videoRef={videoRef} isStreamReady={isStreamReady} />
       </div>
-
-      {/* HUD grid overlay */}
-      <div className="hud-grid-overlay absolute inset-0 pointer-events-none z-10" />
 
       {/* Status indicator - top left floating */}
       <StatusIndicator

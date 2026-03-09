@@ -23,7 +23,7 @@ import {
 import Image from "next/image";
 
 // Lucide icons
-import { Phone, PhoneOff, Mic, MicOff, Loader2, Clock } from "lucide-react";
+import { PhoneOff, Mic, MicOff, Loader2, Clock } from "lucide-react";
 
 // Toast notifications
 import { toast } from "sonner";
@@ -239,14 +239,14 @@ const StatusIndicator: React.FC<StatusIndicatorProps> = ({
 
     if (isSpeaking) {
       return (
-        <div className="status-badge status-badge-cyan flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium">
+        <div className="status-badge status-badge-purple flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium status-pulse">
           <div className="voice-wave mr-0.5">
             <span></span>
             <span></span>
             <span></span>
             <span></span>
           </div>
-          <span>Respondiendo</span>
+          <span>Hablando</span>
         </div>
       );
     }
@@ -293,8 +293,8 @@ const LandingScreen: React.FC<LandingScreenProps> = ({
         <Image
           src="/images/clara-logo.png"
           alt="Clara Logo"
-          width={90}
-          height={90}
+          width={75}
+          height={75}
           className="object-contain relative z-10"
           style={{ filter: "drop-shadow(0 2px 8px rgba(120,160,255,0.3))" }}
         />
@@ -304,7 +304,7 @@ const LandingScreen: React.FC<LandingScreenProps> = ({
       <h1 className="text-3xl font-bold text-gray-900 mb-3 text-center relative z-10">
         {displayName ? `Hola, ${displayName}!` : "Hola!"}
       </h1>
-      <p className="text-base text-gray-500 text-center max-w-xs mb-10 relative z-10 leading-relaxed">
+      <p className="text-base text-gray-700 text-center max-w-xs mb-10 relative z-10 leading-relaxed">
         Soy Clara, tu asistente de belleza personal. Estoy aquí para ayudarte a
         encontrar los productos perfectos para ti.
       </p>
@@ -329,10 +329,7 @@ const LandingScreen: React.FC<LandingScreenProps> = ({
             <span>Espera {rateLimitCountdown}s</span>
           </>
         ) : (
-          <>
-            <Phone className="w-5 h-5 flex-shrink-0" />
-            <span>Iniciar Conversación</span>
-          </>
+          <span>Iniciar Conversación</span>
         )}
       </button>
     </div>
@@ -345,21 +342,22 @@ const LandingScreen: React.FC<LandingScreenProps> = ({
 const ConnectingScreen: React.FC = () => {
   return (
     <div className="futuristic-landing flex-1 w-full flex flex-col items-center justify-center px-8 min-h-screen relative">
-      {/* Clara orb in loading pulse */}
-      <div
-        className="clara-orb mb-8 relative z-10"
-        style={{ animation: "orb-shimmer 2s ease-in-out infinite" }}
-      >
-        <Loader2
-          className="w-12 h-12 animate-spin relative z-10"
-          style={{ color: "rgba(0,180,255,0.8)" }}
+      {/* Clara orb - breathing pulse animation */}
+      <div className="clara-orb orb-breathing mb-8 relative z-10">
+        <Image
+          src="/images/clara-logo.png"
+          alt="Clara Logo"
+          width={75}
+          height={75}
+          className="object-contain relative z-10"
+          style={{ filter: "drop-shadow(0 2px 8px rgba(120,160,255,0.4))" }}
         />
       </div>
 
       <h2 className="text-3xl font-bold text-gray-900 mb-3 text-center relative z-10">
         Conectando...
       </h2>
-      <p className="text-base text-gray-500 text-center max-w-xs mb-10 relative z-10 leading-relaxed">
+      <p className="text-base text-gray-700 text-center max-w-xs mb-10 relative z-10 leading-relaxed">
         Preparando a Clara para ti
       </p>
 

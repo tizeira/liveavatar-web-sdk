@@ -8,6 +8,12 @@ export const metadata: Metadata = {
   title: "Clara - Tu Asesora de Skincare | Beta Skin Tech",
   description:
     "Clara es tu asistente virtual de skincare. Obtiene recomendaciones personalizadas para el cuidado de tu piel.",
+  manifest: "/manifest.json",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "Clara",
+  },
 };
 
 export const viewport: Viewport = {
@@ -16,6 +22,7 @@ export const viewport: Viewport = {
   maximumScale: 1,
   userScalable: false,
   viewportFit: "cover",
+  themeColor: "#f2f6ff",
 };
 
 export default function RootLayout({

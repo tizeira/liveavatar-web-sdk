@@ -20,6 +20,9 @@ import {
   VadInfo,
 } from "../hooks";
 
+// Debug (solo preview/develop)
+import { MobileLogger } from "./debug/MobileLogger";
+
 // shadcn/ui components
 import { Button } from "./ui/button";
 import {
@@ -1706,6 +1709,10 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
             &times;
           </button>
         </div>
+      )}
+
+      {process.env.NODE_ENV !== "production" && (
+        <MobileLogger filter="[AUDIO]|[SEND]|[INTERRUPT]|[LATENCY]" />
       )}
 
       {!sessionToken ? (

@@ -103,6 +103,13 @@ const INTERRUPT_DEBOUNCE_MS = 300; // Ignore chunks for 300ms after interrupt
 // Users cannot realistically interrupt within 100ms of receiving audio
 const AUDIO_SENT_GRACE_PERIOD_MS = 100;
 
+// Minimum samples to accumulate before starting gap detection.
+// Prevents sending a tiny first-chunk fragment (e.g. 0.76s) separately when
+// the next large chunk is arriving within milliseconds — which causes an
+// audible 180-200ms gap between the two blobs sent to HeyGen.
+// 32000 samples = 2s @ 16kHz. Short responses are handled by agent_response_end.
+const MIN_GAP_DETECTION_SAMPLES = 32000;
+
 // Target sample rate for HeyGen
 const TARGET_SAMPLE_RATE = 24000;
 
@@ -123,7 +130,7 @@ interface AudioConfig {
 
 const DESKTOP_CONFIG: AudioConfig = {
   gapThreshold: 250,
-  maxBufferSamples: 64000, // 4s @ 16kHz
+  maxBufferSamples: 128000, // 8s @ 16kHz — larger limit = fewer fragmented blobs
   phase1LeadingSilence: 30, // Minimal - HeyGen handles it well
   phase1TrailingSilence: 0,
   phase2LeadingSilence: 50,
@@ -133,7 +140,7 @@ const DESKTOP_CONFIG: AudioConfig = {
 
 const MOBILE_CONFIG: AudioConfig = {
   gapThreshold: 150, // More sensitive for burst delivery
-  maxBufferSamples: 48000, // 3s @ 16kHz - prevents premature buffer limit
+  maxBufferSamples: 64000, // 4s @ 16kHz
   phase1LeadingSilence: 100, // More time for HeyGen to wake up on mobile
   phase1TrailingSilence: 0,
   phase2LeadingSilence: 80,
@@ -1109,6 +1116,10 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
           console.log(
             `[AUDIO] BUFFER LIMIT: ${currentSamples} samples >= ${audioConfig.maxBufferSamples}, processing NOW`,
           );
+          // Mark that we've already sent audio so PHASE 1 doesn't re-trigger
+          // on the very next chunk (which would create two rapid-fire sends with
+          // 180-200ms of silence between them — the audible "cut" in the middle).
+          hassentImmediateRef.current = true;
           // Clear gap detection since we're processing now
           if (gapCheckIntervalRef.current) {
             clearInterval(gapCheckIntervalRef.current);
@@ -1119,8 +1130,17 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
         }
       }
 
-      // Phase 2: For remaining chunks, use gap detection
-      if (!gapCheckIntervalRef.current) {
+      // Phase 2: For remaining chunks, use gap detection.
+      // Guard: don't start gap detection until MIN_GAP_DETECTION_SAMPLES are
+      // accumulated. Without this, a tiny first chunk (e.g. 0.76s) triggers
+      // gap detection after 250ms and gets sent as a separate blob, causing an
+      // audible gap before the next large chunk arrives and plays.
+      // Short responses (< MIN threshold) are handled by agent_response_end.
+      const samplesForGap = calculateBufferSamples(audioBufferRef.current);
+      if (
+        !gapCheckIntervalRef.current &&
+        samplesForGap >= MIN_GAP_DETECTION_SAMPLES
+      ) {
         startGapDetection();
       }
     },
@@ -1248,8 +1268,9 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
         // This caused first words to be cut off on subsequent responses
         hassentImmediateRef.current = false;
 
-        // Set the interrupt flag for leading silence on next response
-        isAfterInterruptRef.current = true;
+        // Do NOT set isAfterInterruptRef here — this is a normal turn, not an interruption.
+        // Setting it was adding 50ms lead silence to every response unnecessarily,
+        // which combined with trailing silence from the previous send created audible gaps.
       }
     },
     onError: (error) => {

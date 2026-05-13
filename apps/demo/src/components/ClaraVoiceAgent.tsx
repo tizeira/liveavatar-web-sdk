@@ -819,9 +819,11 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
 
   // Send ALL accumulated audio to avatar (called when gap detected or agent_response_end)
   // HYBRID: Resamples once after concatenation, adds silence, uses Smart Chunking for large audio
-  // isImmediateSend: true for PHASE 1 (first words, minimal silence), false for PHASE 2 (rest of response)
+  // isImmediateSend:    true  → PHASE 1 (first words, minimal silence)
+  // isContinuationBlob: true  → continuation after PHASE 1 already sent; 0ms lead to avoid audible
+  //                             gap between consecutive repeatAudio() calls ("per-to" bug fix)
   const sendAllAudioToAvatar = useCallback(
-    (isImmediateSend: boolean = false) => {
+    (isImmediateSend: boolean = false, isContinuationBlob: boolean = false) => {
       // Clear gap check interval
       if (gapCheckIntervalRef.current) {
         clearInterval(gapCheckIntervalRef.current);
@@ -876,9 +878,13 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
 
       // 5. Add leading + trailing silence (DIFFERENTIATED BY PHASE)
       // Uses runtime audioConfig for device-specific values
+      // isContinuationBlob: 0ms lead — this audio follows immediately after a previous blob,
+      // adding lead silence would create an audible gap mid-word ("per-to" bug)
       const leadingSilenceMs = isImmediateSend
         ? audioConfig.phase1LeadingSilence
-        : audioConfig.phase2LeadingSilence;
+        : isContinuationBlob
+          ? 0
+          : audioConfig.phase2LeadingSilence;
       const trailingSilenceMs = isImmediateSend
         ? audioConfig.phase1TrailingSilence
         : audioConfig.phase2TrailingSilence;
@@ -893,7 +899,11 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       finalAudio = concatenateBase64Audio(audioWithSilence);
 
       // Log with phase info
-      const phaseLabel = isImmediateSend ? "PHASE 1 (fast)" : "PHASE 2";
+      const phaseLabel = isImmediateSend
+        ? "PHASE 1 (fast)"
+        : isContinuationBlob
+          ? "PHASE 2 (continuation, 0ms lead)"
+          : "PHASE 2";
       const interruptNote = isAfterInterruptRef.current
         ? " (post-interrupt)"
         : "";
@@ -1007,7 +1017,8 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
         console.log(
           `[AUDIO] Gap detected (${timeSinceLastChunk}ms >= ${audioConfig.gapThreshold}ms) - sending buffered audio`,
         );
-        sendAllAudioToAvatar();
+        // Pass continuation=true if PHASE 1 already fired → 0ms lead to avoid mid-word gap
+        sendAllAudioToAvatar(false, hassentImmediateRef.current);
       }
     }, 50);
   }, [sendAllAudioToAvatar, audioConfig.gapThreshold]);
@@ -1069,33 +1080,37 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
       );
 
       // TWO-PHASE STRATEGY:
-      // Phase 1: Send first chunk IMMEDIATELY (contains first words - reduces perceived latency)
+      // Phase 1: Send IMMEDIATELY once enough audio is accumulated (reduces perceived latency)
       // This is SYNCHRONOUS - no timeout, no delay, just send NOW
       // GREETING FIX: Skip PHASE 1 for greeting to accumulate more audio
-      if (!hassentImmediateRef.current && currentBufferLength === 1) {
+      //
+      // BUG FIX: Previously checked `currentBufferLength === 1` (first chunk only).
+      // If the first chunk was too small, PHASE 1 was permanently skipped even as
+      // subsequent chunks pushed the total above the threshold → buffer limit fired
+      // → split blob → audible gap mid-word (e.g. "per-to" instead of "perfecto").
+      // Fix: re-evaluate on every incoming chunk until threshold is met.
+      if (!hassentImmediateRef.current) {
         if (isFirstAudioRef.current && GREETING_SKIP_PHASE1) {
           console.log("[AUDIO] GREETING: Skipping PHASE 1 (immediate send)");
           // Don't send yet - continue to gap detection or buffer limit
         } else {
-          // TRUNCATION FIX: Check if first chunk has enough audio content
-          // Calculate samples from first chunk (base64 → bytes → samples)
-          const firstChunk = audioBufferRef.current[0]!;
-          const estimatedSamples = Math.round((firstChunk.length * 0.75) / 2);
-
-          // Device-aware threshold to prevent mobile truncation
+          // Device-aware threshold and total buffer sample count
           const isMobile = isMobileDevice();
           const minPhase1Samples = getMinPhase1Samples(isMobile);
+          const totalBufferSamples = calculateBufferSamples(
+            audioBufferRef.current,
+          );
 
-          if (estimatedSamples < minPhase1Samples) {
+          if (totalBufferSamples < minPhase1Samples) {
             console.log(
-              `[AUDIO] PHASE 1 [${isMobile ? "MOBILE" : "DESKTOP"}]: First chunk too small (${estimatedSamples}/${minPhase1Samples} samples), waiting for more`,
+              `[AUDIO] PHASE 1 [${isMobile ? "MOBILE" : "DESKTOP"}]: Buffer too small (${totalBufferSamples}/${minPhase1Samples} samples), waiting for more`,
             );
             // Don't send yet - let gap detection or buffer limit handle it
             // Continue to PHASE 2 logic below
           } else {
             hassentImmediateRef.current = true;
             console.log(
-              `[AUDIO] PHASE 1 [${isMobile ? "MOBILE" : "DESKTOP"}]: IMMEDIATE send with sufficient content (${estimatedSamples} samples, threshold: ${minPhase1Samples})`,
+              `[AUDIO] PHASE 1 [${isMobile ? "MOBILE" : "DESKTOP"}]: IMMEDIATE send with sufficient content (${totalBufferSamples} samples, threshold: ${minPhase1Samples})`,
             );
             // Send synchronously - first words go out ASAP
             sendAllAudioToAvatar(true); // isImmediateSend = true for minimal silence
@@ -1150,7 +1165,8 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
     onAgentResponseEnd: () => {
       // Agent finished speaking - send immediately (faster than timeout)
       console.log("[AUDIO] agent_response_end received, sending all audio now");
-      sendAllAudioToAvatar();
+      // Pass continuation=true if PHASE 1 already fired → 0ms lead to avoid mid-word gap
+      sendAllAudioToAvatar(false, hassentImmediateRef.current);
     },
     onAgentResponse: () => {
       console.log("[AUDIO] agent_response received - new response starting");

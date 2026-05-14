@@ -7,6 +7,11 @@ import {
   HEYGEN_ELEVENLABS_SECRET_ID,
   ELEVENLABS_AGENT_ID,
   CHROMA_KEY_ENABLED,
+  CHROMA_MIN_HUE,
+  CHROMA_MAX_HUE,
+  CHROMA_MIN_SATURATION,
+  CHROMA_EDGE_SHARPNESS,
+  CHROMA_BG_URL,
 } from "../secrets";
 import { NextRequest } from "next/server";
 import { rateLimitByEndpoint } from "@/src/lib/rate-limit";
@@ -354,6 +359,15 @@ export async function POST(request: Request) {
       session_token,
       session_id,
       chroma_key_enabled: CHROMA_KEY_ENABLED,
+      ...(CHROMA_KEY_ENABLED && {
+        chroma_config: {
+          minHue: CHROMA_MIN_HUE,
+          maxHue: CHROMA_MAX_HUE,
+          minSaturation: CHROMA_MIN_SATURATION,
+          edgeSharpness: CHROMA_EDGE_SHARPNESS,
+          bgUrl: CHROMA_BG_URL || null,
+        },
+      }),
     }),
     {
       status: 200,

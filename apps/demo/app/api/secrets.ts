@@ -7,6 +7,18 @@ export const API_URL = "https://api.liveavatar.com";
 export const CHROMA_KEY_ENABLED =
   (process.env.CHROMA_KEY_ENABLED || "false").toLowerCase() === "true";
 
+// Chroma Key tuning (all optional — defaults work for standard HeyGen green)
+// Tighten minHue/maxHue (e.g. 90/150) to reduce holes in hair/dark clothing
+export const CHROMA_MIN_HUE = Number(process.env.CHROMA_MIN_HUE) || 60;
+export const CHROMA_MAX_HUE = Number(process.env.CHROMA_MAX_HUE) || 180;
+export const CHROMA_MIN_SATURATION =
+  Number(process.env.CHROMA_MIN_SATURATION) || 0.1;
+export const CHROMA_EDGE_SHARPNESS =
+  Number(process.env.CHROMA_EDGE_SHARPNESS) || 4;
+
+// Custom background URL (image) — empty = transparent
+export const CHROMA_BG_URL = process.env.CHROMA_BG_URL || "";
+
 // Avatar IDs - Responsive configuration
 // When CHROMA_KEY_ENABLED=true → use green-screen (no background) avatar IDs
 // When CHROMA_KEY_ENABLED=false → use avatars with pre-designed background

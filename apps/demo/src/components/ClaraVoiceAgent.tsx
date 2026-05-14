@@ -316,6 +316,7 @@ interface AvatarVideoProps {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   isStreamReady: boolean;
   chromaKeyEnabled: boolean;
+  chromaSettings: ChromaSettings;
 }
 
 /**
@@ -323,7 +324,7 @@ interface AvatarVideoProps {
  *
  * DOM stack when chroma key is ON (matches HeyGen official bg-removal-demo):
  *   <container>
- *     <bg-layer />   ← transparent by default, ready for image/video (z-0)
+ *     <bg-layer />   ← transparent, color, or image background (z-0)
  *     <video />      ← raw avatar stream, visibility:hidden keeps decoder alive (z-10)
  *     <canvas />     ← processed frames with green removed (z-20)
  *   </container>
@@ -339,17 +340,30 @@ const AvatarVideo: React.FC<AvatarVideoProps> = ({
   videoRef,
   isStreamReady,
   chromaKeyEnabled,
+  chromaSettings,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const chromaConfig = useMemo<ChromaKeyConfig>(
     () => ({
       enabled: chromaKeyEnabled && isStreamReady,
+      options: {
+        ...(chromaSettings.minHue != null && { minHue: chromaSettings.minHue }),
+        ...(chromaSettings.maxHue != null && { maxHue: chromaSettings.maxHue }),
+        ...(chromaSettings.minSaturation != null && {
+          minSaturation: chromaSettings.minSaturation,
+        }),
+        ...(chromaSettings.edgeSharpness != null && {
+          edgeSharpness: chromaSettings.edgeSharpness,
+        }),
+      },
     }),
-    [chromaKeyEnabled, isStreamReady],
+    [chromaKeyEnabled, isStreamReady, chromaSettings],
   );
 
   useChromaKey(videoRef, canvasRef, chromaConfig);
+
+  const bgUrl = chromaSettings.bgUrl;
 
   return (
     <div className="avatar-container rounded-2xl overflow-hidden shadow-2xl relative">
@@ -359,13 +373,14 @@ const AvatarVideo: React.FC<AvatarVideoProps> = ({
         </div>
       )}
 
-      {/* Background layer (z-0) — transparent by default.
-          Ready for future: drop an <img> or <video> here for custom backgrounds. */}
+      {/* Background layer (z-0) — transparent, or custom image via CHROMA_BG_URL */}
       {chromaKeyEnabled && (
-        <div
-          className="absolute inset-0 z-0"
-          style={{ backgroundColor: "transparent" }}
-        />
+        <div className="absolute inset-0 z-0">
+          {bgUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={bgUrl} alt="" className="w-full h-full object-cover" />
+          ) : null}
+        </div>
       )}
 
       {/* Raw video (z-10) — always playing so the canvas has a live source.
@@ -403,11 +418,13 @@ const AvatarVideo: React.FC<AvatarVideoProps> = ({
 interface ConnectedSessionProps {
   onEndCall: () => void;
   chromaKeyEnabled: boolean;
+  chromaSettings: ChromaSettings;
 }
 
 const ConnectedSession: React.FC<ConnectedSessionProps> = ({
   onEndCall,
   chromaKeyEnabled,
+  chromaSettings,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const { isDesktop } = useScreenSize();
@@ -647,6 +664,7 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
             videoRef={videoRef}
             isStreamReady={isStreamReady}
             chromaKeyEnabled={chromaKeyEnabled}
+            chromaSettings={chromaSettings}
           />
 
           {/* Controls overlay */}
@@ -683,14 +701,24 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
 // ============================================
 // SESSION WRAPPER COMPONENT
 // ============================================
+interface ChromaSettings {
+  minHue?: number;
+  maxHue?: number;
+  minSaturation?: number;
+  edgeSharpness?: number;
+  bgUrl?: string | null;
+}
+
 interface SessionWrapperProps {
   onSessionStopped: () => void;
   chromaKeyEnabled: boolean;
+  chromaSettings: ChromaSettings;
 }
 
 const SessionWrapper: React.FC<SessionWrapperProps> = ({
   onSessionStopped,
   chromaKeyEnabled,
+  chromaSettings,
 }) => {
   const { widgetState, sessionState } = useLiveAvatarContext();
   const { startSession, stopSession } = useSession();
@@ -723,6 +751,7 @@ const SessionWrapper: React.FC<SessionWrapperProps> = ({
       <ConnectedSession
         onEndCall={handleEndCall}
         chromaKeyEnabled={chromaKeyEnabled}
+        chromaSettings={chromaSettings}
       />
     );
   }
@@ -744,6 +773,13 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
 }) => {
   const [sessionToken, setSessionToken] = useState<string | null>(null);
   const [chromaKeyEnabled, setChromaKeyEnabled] = useState(false);
+  const [chromaSettings, setChromaSettings] = useState<{
+    minHue?: number;
+    maxHue?: number;
+    minSaturation?: number;
+    edgeSharpness?: number;
+    bgUrl?: string | null;
+  }>({});
   const [isStarting, setIsStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { fixedHeight, isInIframe } = useFixedHeight();
@@ -827,9 +863,11 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
         throw new Error(errorData.error || "Failed to start session");
       }
 
-      const { session_token, chroma_key_enabled } = await res.json();
+      const { session_token, chroma_key_enabled, chroma_config } =
+        await res.json();
       setSessionToken(session_token);
       setChromaKeyEnabled(chroma_key_enabled === true);
+      if (chroma_config) setChromaSettings(chroma_config);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -885,6 +923,7 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
           <SessionWrapper
             onSessionStopped={handleSessionStopped}
             chromaKeyEnabled={chromaKeyEnabled}
+            chromaSettings={chromaSettings}
           />
         </LiveAvatarContextProvider>
       )}

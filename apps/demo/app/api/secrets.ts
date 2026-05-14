@@ -7,20 +7,21 @@ export const API_URL = "https://api.liveavatar.com";
 export const CHROMA_KEY_ENABLED =
   (process.env.CHROMA_KEY_ENABLED || "false").toLowerCase() === "true";
 
-// Chroma Key tuning (all optional — defaults work for standard HeyGen green)
-// Tighten minHue/maxHue (e.g. 90/150) to reduce holes in hair/dark clothing
-export const CHROMA_MIN_HUE = Number(process.env.CHROMA_MIN_HUE) || 60;
-export const CHROMA_MAX_HUE = Number(process.env.CHROMA_MAX_HUE) || 180;
+// Chroma Key tuning (all optional — override via env vars)
+// Defaults tuned for HeyGen green screen with minimal hair/clothing artifacts
+export const CHROMA_MIN_HUE = Number(process.env.CHROMA_MIN_HUE) || 100;
+export const CHROMA_MAX_HUE = Number(process.env.CHROMA_MAX_HUE) || 155;
 export const CHROMA_MIN_SATURATION =
-  Number(process.env.CHROMA_MIN_SATURATION) || 0.1;
+  Number(process.env.CHROMA_MIN_SATURATION) || 0.15;
 export const CHROMA_EDGE_SHARPNESS =
-  Number(process.env.CHROMA_EDGE_SHARPNESS) || 4;
+  Number(process.env.CHROMA_EDGE_SHARPNESS) || 6;
 
-// Custom background URLs (image) — empty = transparent
-// Desktop: 16:9 aspect ratio recommended
-export const CHROMA_BG_URL_DESKTOP = process.env.CHROMA_BG_URL_DESKTOP || "";
-// Mobile: 9:16 aspect ratio recommended
-export const CHROMA_BG_URL_MOBILE = process.env.CHROMA_BG_URL_MOBILE || "";
+// Custom background URLs — defaults to local images in public/backgrounds/
+// Override with env vars to use external CDN URLs
+export const CHROMA_BG_URL_DESKTOP =
+  process.env.CHROMA_BG_URL_DESKTOP || "/backgrounds/desktop.png";
+export const CHROMA_BG_URL_MOBILE =
+  process.env.CHROMA_BG_URL_MOBILE || "/backgrounds/mobile.png";
 
 // Avatar IDs - Responsive configuration
 // When CHROMA_KEY_ENABLED=true → use green-screen (no background) avatar IDs

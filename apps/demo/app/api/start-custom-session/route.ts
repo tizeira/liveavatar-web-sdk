@@ -6,6 +6,7 @@ import {
   AVATAR_ID_DESKTOP,
   HEYGEN_ELEVENLABS_SECRET_ID,
   ELEVENLABS_AGENT_ID,
+  CHROMA_KEY_ENABLED,
 } from "../secrets";
 import { NextRequest } from "next/server";
 import { rateLimitByEndpoint } from "@/src/lib/rate-limit";
@@ -348,10 +349,17 @@ export async function POST(request: Request) {
     );
   }
 
-  return new Response(JSON.stringify({ session_token, session_id }), {
-    status: 200,
-    headers: {
-      "Content-Type": "application/json",
+  return new Response(
+    JSON.stringify({
+      session_token,
+      session_id,
+      chroma_key_enabled: CHROMA_KEY_ENABLED,
+    }),
+    {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+      },
     },
-  });
+  );
 }

@@ -2,15 +2,32 @@
 export const API_KEY = process.env.HEYGEN_API_KEY || "";
 export const API_URL = "https://api.liveavatar.com";
 
+// Chroma Key toggle — "true" = green screen avatar + frontend chroma key
+// Configure per-environment in Vercel: set only for Preview, not Production.
+export const CHROMA_KEY_ENABLED =
+  (process.env.CHROMA_KEY_ENABLED || "false").toLowerCase() === "true";
+
 // Avatar IDs - Responsive configuration
-// Mobile: Portrait aspect ratio (9:16) - optimized for vertical screens
-export const AVATAR_ID_MOBILE =
-  process.env.HEYGEN_AVATAR_ID_MOBILE || "65cca4cf-b7c8-4619-871f-84e2cf8b21d4";
-// Desktop: Landscape aspect ratio (16:9) - optimized for horizontal screens
-export const AVATAR_ID_DESKTOP =
-  process.env.HEYGEN_AVATAR_ID_DESKTOP ||
-  "073b60a9-89a8-45aa-8902-c358f64d2852";
-// Default fallback (used when no device type specified)
+// When CHROMA_KEY_ENABLED=true → use green-screen (no background) avatar IDs
+// When CHROMA_KEY_ENABLED=false → use avatars with pre-designed background
+
+// Mobile: Portrait aspect ratio (9:16)
+export const AVATAR_ID_MOBILE = CHROMA_KEY_ENABLED
+  ? process.env.HEYGEN_AVATAR_ID_MOBILE_GREENSCREEN ||
+    process.env.HEYGEN_AVATAR_ID_MOBILE ||
+    "65cca4cf-b7c8-4619-871f-84e2cf8b21d4"
+  : process.env.HEYGEN_AVATAR_ID_MOBILE ||
+    "65cca4cf-b7c8-4619-871f-84e2cf8b21d4";
+
+// Desktop: Landscape aspect ratio (16:9)
+export const AVATAR_ID_DESKTOP = CHROMA_KEY_ENABLED
+  ? process.env.HEYGEN_AVATAR_ID_DESKTOP_GREENSCREEN ||
+    process.env.HEYGEN_AVATAR_ID_DESKTOP ||
+    "073b60a9-89a8-45aa-8902-c358f64d2852"
+  : process.env.HEYGEN_AVATAR_ID_DESKTOP ||
+    "073b60a9-89a8-45aa-8902-c358f64d2852";
+
+// Default fallback
 export const AVATAR_ID = AVATAR_ID_DESKTOP;
 
 // FULL MODE Customizations

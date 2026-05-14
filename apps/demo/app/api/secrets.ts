@@ -27,6 +27,10 @@ export const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 // ELEVENLABS VOICE AGENT
 export const ELEVENLABS_AGENT_ID = process.env.ELEVENLABS_AGENT_ID || "";
 
+// ELEVENLABS PLUGIN — HeyGen-stored secret (not the raw API key)
+export const HEYGEN_ELEVENLABS_SECRET_ID =
+  process.env.HEYGEN_ELEVENLABS_SECRET_ID || "";
+
 // SHOPIFY Configuration
 export const SHOPIFY_STORE_DOMAIN = process.env.SHOPIFY_STORE_DOMAIN || "";
 export const SHOPIFY_ADMIN_ACCESS_TOKEN =

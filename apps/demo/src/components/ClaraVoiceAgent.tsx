@@ -363,7 +363,10 @@ const AvatarVideo: React.FC<AvatarVideoProps> = ({
 
   useChromaKey(videoRef, canvasRef, chromaConfig);
 
-  const bgUrl = chromaSettings.bgUrl;
+  const { isDesktop: isDesktopBg } = useScreenSize();
+  const bgUrl = isDesktopBg
+    ? chromaSettings.bgUrlDesktop
+    : chromaSettings.bgUrlMobile;
 
   return (
     <div className="avatar-container rounded-2xl overflow-hidden shadow-2xl relative">
@@ -706,7 +709,8 @@ interface ChromaSettings {
   maxHue?: number;
   minSaturation?: number;
   edgeSharpness?: number;
-  bgUrl?: string | null;
+  bgUrlDesktop?: string | null;
+  bgUrlMobile?: string | null;
 }
 
 interface SessionWrapperProps {
@@ -778,7 +782,8 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
     maxHue?: number;
     minSaturation?: number;
     edgeSharpness?: number;
-    bgUrl?: string | null;
+    bgUrlDesktop?: string | null;
+    bgUrlMobile?: string | null;
   }>({});
   const [isStarting, setIsStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);

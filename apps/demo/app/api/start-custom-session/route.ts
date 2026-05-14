@@ -11,7 +11,8 @@ import {
   CHROMA_MAX_HUE,
   CHROMA_MIN_SATURATION,
   CHROMA_EDGE_SHARPNESS,
-  CHROMA_BG_URL,
+  CHROMA_BG_URL_DESKTOP,
+  CHROMA_BG_URL_MOBILE,
 } from "../secrets";
 import { NextRequest } from "next/server";
 import { rateLimitByEndpoint } from "@/src/lib/rate-limit";
@@ -365,7 +366,8 @@ export async function POST(request: Request) {
           maxHue: CHROMA_MAX_HUE,
           minSaturation: CHROMA_MIN_SATURATION,
           edgeSharpness: CHROMA_EDGE_SHARPNESS,
-          bgUrl: CHROMA_BG_URL || null,
+          bgUrlDesktop: CHROMA_BG_URL_DESKTOP || null,
+          bgUrlMobile: CHROMA_BG_URL_MOBILE || null,
         },
       }),
     }),

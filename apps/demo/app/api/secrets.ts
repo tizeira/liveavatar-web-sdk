@@ -16,8 +16,11 @@ export const CHROMA_MIN_SATURATION =
 export const CHROMA_EDGE_SHARPNESS =
   Number(process.env.CHROMA_EDGE_SHARPNESS) || 4;
 
-// Custom background URL (image) — empty = transparent
-export const CHROMA_BG_URL = process.env.CHROMA_BG_URL || "";
+// Custom background URLs (image) — empty = transparent
+// Desktop: 16:9 aspect ratio recommended
+export const CHROMA_BG_URL_DESKTOP = process.env.CHROMA_BG_URL_DESKTOP || "";
+// Mobile: 9:16 aspect ratio recommended
+export const CHROMA_BG_URL_MOBILE = process.env.CHROMA_BG_URL_MOBILE || "";
 
 // Avatar IDs - Responsive configuration
 // When CHROMA_KEY_ENABLED=true → use green-screen (no background) avatar IDs

@@ -4,6 +4,8 @@ import {
   API_URL,
   AVATAR_ID_MOBILE,
   AVATAR_ID_DESKTOP,
+  HEYGEN_ELEVENLABS_SECRET_ID,
+  ELEVENLABS_AGENT_ID,
 } from "../secrets";
 import { NextRequest } from "next/server";
 import { rateLimitByEndpoint } from "@/src/lib/rate-limit";
@@ -125,21 +127,40 @@ export async function POST(request: Request) {
     );
   }
 
+  if (!HEYGEN_ELEVENLABS_SECRET_ID) {
+    logger.error("[HEYGEN] HEYGEN_ELEVENLABS_SECRET_ID not configured", null, {
+      route: "/api/start-custom-session",
+    });
+    return new Response(
+      JSON.stringify({
+        error: "ElevenLabs plugin not configured",
+        code: "HEYGEN_ELEVENLABS_SECRET_MISSING",
+      }),
+      { status: 500, headers: { "Content-Type": "application/json" } },
+    );
+  }
+
   logger.info(
-    "[HEYGEN] Starting CUSTOM session",
+    "[HEYGEN] Starting LITE+ElevenLabs Plugin session",
     {
       avatarId,
       deviceType,
       apiUrl: API_URL,
       hasApiKey: !!API_KEY,
+      hasSecretId: !!HEYGEN_ELEVENLABS_SECRET_ID,
+      agentId: ELEVENLABS_AGENT_ID,
     },
     { route: "/api/start-custom-session" },
   );
 
   try {
     const heygenPayload = {
-      mode: "CUSTOM",
+      mode: "LITE",
       avatar_id: avatarId,
+      elevenlabs_agent_config: {
+        secret_id: HEYGEN_ELEVENLABS_SECRET_ID,
+        agent_id: ELEVENLABS_AGENT_ID,
+      },
     };
 
     logger.debug("[HEYGEN] Request payload", heygenPayload, {

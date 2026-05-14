@@ -363,6 +363,10 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
   const hasSentContextRef = useRef(false);
 
   // === PLUGIN INIT: contextual_update → voiceChat.start() ===
+  // Deps include customerData so late-arriving Shopify data still gets sent.
+  // hasSentContextRef prevents duplicate sends and duplicate voiceChat.start().
+  const hasStartedVoiceChatRef = useRef(false);
+
   useEffect(() => {
     const session = sessionRef.current;
     if (!isStreamReady || !session) return;
@@ -384,19 +388,23 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
         await new Promise((r) => setTimeout(r, 200));
       }
 
-      // Step 2: Start voice chat (publishes mic to LiveKit)
-      try {
-        console.log("[PLUGIN] Starting voiceChat");
-        await session.voiceChat.start({ defaultMuted: false });
-        console.log("[PLUGIN] VoiceChat started successfully");
-      } catch (err) {
-        console.error("[PLUGIN] Failed to start voiceChat:", err);
+      // Step 2: Start voice chat (publishes mic to LiveKit) — once only
+      if (!hasStartedVoiceChatRef.current) {
+        hasStartedVoiceChatRef.current = true;
+        try {
+          console.log("[PLUGIN] Starting voiceChat");
+          await session.voiceChat.start({ defaultMuted: false });
+          console.log("[PLUGIN] VoiceChat started successfully");
+        } catch (err) {
+          console.error("[PLUGIN] Failed to start voiceChat:", err);
+          hasStartedVoiceChatRef.current = false; // Allow retry on failure
+        }
       }
     };
 
     initPlugin();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isStreamReady]);
+  }, [isStreamReady, customerData]);
 
   // === UI STATE: Derive "thinking" from SDK events ===
   useEffect(() => {

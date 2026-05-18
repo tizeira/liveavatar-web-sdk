@@ -8,13 +8,13 @@ export const CHROMA_KEY_ENABLED =
   (process.env.CHROMA_KEY_ENABLED || "false").toLowerCase() === "true";
 
 // Chroma Key tuning (all optional — override via env vars)
-// Defaults tuned for HeyGen green screen with minimal hair/clothing artifacts
-export const CHROMA_MIN_HUE = Number(process.env.CHROMA_MIN_HUE) || 100;
-export const CHROMA_MAX_HUE = Number(process.env.CHROMA_MAX_HUE) || 155;
+// Defaults tuned aggressively for HeyGen green screen — eliminates dots in hair/clothing
+export const CHROMA_MIN_HUE = Number(process.env.CHROMA_MIN_HUE) || 90;
+export const CHROMA_MAX_HUE = Number(process.env.CHROMA_MAX_HUE) || 160;
 export const CHROMA_MIN_SATURATION =
-  Number(process.env.CHROMA_MIN_SATURATION) || 0.15;
+  Number(process.env.CHROMA_MIN_SATURATION) || 0.08;
 export const CHROMA_EDGE_SHARPNESS =
-  Number(process.env.CHROMA_EDGE_SHARPNESS) || 6;
+  Number(process.env.CHROMA_EDGE_SHARPNESS) || 10;
 
 // Custom background URLs — defaults to local images in public/backgrounds/
 // Override with env vars to use external CDN URLs

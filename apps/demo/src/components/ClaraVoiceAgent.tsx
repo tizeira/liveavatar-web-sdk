@@ -441,6 +441,15 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
   // Local state: "thinking" = between USER_SPEAK_ENDED and AVATAR_SPEAK_STARTED
   const [isThinking, setIsThinking] = useState(false);
 
+  // Mobile warm-up: brief overlay after stream ready so greeting doesn't appear mid-sentence.
+  // On mobile, video buffering is slower — this gives ~1.5s for the stream to stabilize.
+  const [isWarmingUp, setIsWarmingUp] = useState(!isDesktop);
+  useEffect(() => {
+    if (!isStreamReady || isDesktop) return;
+    const timer = setTimeout(() => setIsWarmingUp(false), 1500);
+    return () => clearTimeout(timer);
+  }, [isStreamReady, isDesktop]);
+
   // Session limit
   const [sessionSecondsRemaining, setSessionSecondsRemaining] = useState(
     SESSION_LIMIT_MINUTES * 60,
@@ -479,15 +488,38 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
       }
 
       // Step 2: Start voice chat (publishes mic to LiveKit) — once only
+      // On mobile, voiceChat.start() can fail silently — retry up to 3 times
       if (!hasStartedVoiceChatRef.current) {
         hasStartedVoiceChatRef.current = true;
-        try {
-          console.log("[PLUGIN] Starting voiceChat");
-          await session.voiceChat.start({ defaultMuted: false });
-          console.log("[PLUGIN] VoiceChat started successfully");
-        } catch (err) {
-          console.error("[PLUGIN] Failed to start voiceChat:", err);
-          hasStartedVoiceChatRef.current = false; // Allow retry on failure
+        const maxRetries = 3;
+        let started = false;
+
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+          try {
+            console.log(
+              `[PLUGIN] Starting voiceChat (attempt ${attempt}/${maxRetries})`,
+            );
+            await session.voiceChat.start({ defaultMuted: false });
+            console.log("[PLUGIN] VoiceChat started successfully");
+            started = true;
+            break;
+          } catch (err) {
+            console.error(
+              `[PLUGIN] voiceChat.start() attempt ${attempt} failed:`,
+              err,
+            );
+            if (attempt < maxRetries) {
+              // Wait before retrying (longer on each attempt)
+              await new Promise((r) => setTimeout(r, 500 * attempt));
+            }
+          }
+        }
+
+        if (!started) {
+          console.error(
+            "[PLUGIN] voiceChat.start() failed after all retries — mic not publishing",
+          );
+          hasStartedVoiceChatRef.current = false; // Allow future retry
         }
       }
     };
@@ -634,6 +666,21 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
       className="flex-1 flex flex-col items-center justify-center relative safe-area-all w-full"
       style={containerStyle}
     >
+      {/* Mobile warm-up overlay — hides video until stream has buffered enough frames */}
+      {isWarmingUp && (
+        <div className="absolute inset-0 z-40 flex items-center justify-center bg-slate-50">
+          <div className="text-center">
+            <Loader2
+              className="w-8 h-8 animate-spin mx-auto mb-3"
+              style={{ color: "var(--platinum-700)" }}
+            />
+            <p className="text-neutral-600 text-sm font-medium">
+              Preparando a Clara...
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Session expiry warning */}
       {showExpiryWarning && (
         <SessionExpiryWarning secondsRemaining={sessionSecondsRemaining} />
@@ -832,11 +879,40 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
     }
   }, [rateLimitCountdown]);
 
+  // Pre-warm microphone permission before starting session.
+  // On mobile, getUserMedia must happen close to a user gesture or it may fail.
+  // We request + immediately release the mic so the browser remembers the grant.
+  const prewarmMicrophone = useCallback(async () => {
+    try {
+      console.log("[MIC] Pre-warming microphone permission...");
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Stop tracks immediately — we just need the permission grant
+      stream.getTracks().forEach((t) => t.stop());
+      console.log("[MIC] Microphone permission granted");
+      return true;
+    } catch (err) {
+      console.error("[MIC] Microphone permission denied:", err);
+      return false;
+    }
+  }, []);
+
   const handleStartCall = useCallback(async () => {
     setIsStarting(true);
     setError(null);
 
     try {
+      // Step 0: Pre-warm mic on mobile (must happen in user gesture context)
+      if (!isDesktop) {
+        const micOk = await prewarmMicrophone();
+        if (!micOk) {
+          setError(
+            "Se necesita acceso al micrófono para hablar con Clara. Por favor permite el acceso e intenta de nuevo.",
+          );
+          setIsStarting(false);
+          return;
+        }
+      }
+
       // Use LITE mode with ElevenLabs Plugin (HeyGen handles STT/LLM/TTS server-side)
       const res = await fetch("/api/start-custom-session", {
         method: "POST",
@@ -878,7 +954,7 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
     } finally {
       setIsStarting(false);
     }
-  }, [isDesktop]);
+  }, [isDesktop, prewarmMicrophone]);
 
   const handleSessionStopped = useCallback(() => {
     setSessionToken(null);

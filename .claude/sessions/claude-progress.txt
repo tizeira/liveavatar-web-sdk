@@ -1,5 +1,65 @@
 # Clara Voice Agent - Session Progress
 
+## 2026-05-14: ElevenLabs Plugin Migration + Chroma Key Feature
+
+### Branch: `feature/elevenlabs-plugin`
+### PR: #15 (pending merge)
+
+### Part 1 — ElevenLabs Plugin Migration (completed, in PR #15)
+
+Replaced ~500 lines of manual audio piping (Mic→WebAudio→ElevenLabs WS→buffer→resample→HeyGen)
+with HeyGen's native ElevenLabs Plugin (Mic→LiveKit→HeyGen server→ElevenLabs→lip-sync).
+
+**Key changes:**
+- SDK updated v0.0.9 → v0.0.18 (ElevenLabsAgentSession class)
+- Session mode: CUSTOM → LITE + `elevenlabs_agent_config`
+- HeyGen Secrets API: stored ElevenLabs API key, got `secret_id`
+- ClaraVoiceAgent: ~1756 lines → ~801 lines (net -950 lines removed)
+- Customer context via `session.sendContextualUpdate()` (no escape hatch)
+- All audio refs, hooks, constants, functions removed
+- New: `src/utils/heygen/elevenlabs-commands.ts` (contextual_update helper)
+
+**Commits:** 59c1011 → 92ce46e (7 commits)
+
+**ElevenLabs dashboard requirement:**
+- Agent output (TTS): `pcm_24000` (REQUIRED for HeyGen lip-sync)
+- User input (STT): `pcm_16000`
+
+### Part 2 — Chroma Key / Green Screen Feature (uncommitted)
+
+Added configurable green screen removal via Canvas 2D chroma keying.
+Controlled by `CHROMA_KEY_ENABLED` env var (set per-environment in Vercel).
+
+**New files:**
+- `src/hooks/useChromaKey.ts` — HSV-based chroma key hook (matches HeyGen official bg-removal-demo)
+
+**Modified files:**
+- `app/api/secrets.ts` — `CHROMA_KEY_ENABLED`, `*_GREENSCREEN` avatar ID selection
+- `app/api/start-custom-session/route.ts` — passes `chroma_key_enabled` to frontend
+- `src/components/ClaraVoiceAgent.tsx` — AvatarVideo with 3-layer DOM stack (bg/video/canvas)
+- `src/hooks/index.ts` — exports useChromaKey
+- `turbo.json` — new env vars in globalEnv
+
+**How it works:**
+- `CHROMA_KEY_ENABLED=false` (default): normal avatar with background, plain <video>
+- `CHROMA_KEY_ENABLED=true`: green screen avatar + canvas chroma key processing
+- Algorithm: RGB→HSV conversion, hue range 60°-180°, greenness soft-edge formula
+- DOM: bg-layer(z-0) → video(z-10, visibility:hidden) → canvas(z-20)
+- video uses `visibility:hidden` (NOT opacity:0) to keep decoder active
+
+**Vercel env vars (Preview only):**
+- `CHROMA_KEY_ENABLED=true`
+- `HEYGEN_AVATAR_ID_DESKTOP_GREENSCREEN=<avatar-id>`
+- `HEYGEN_AVATAR_ID_MOBILE_GREENSCREEN=<avatar-id>`
+
+### Pending
+- [ ] Commit + push chroma key changes
+- [ ] Add env vars in Vercel Preview scope
+- [ ] Test chroma key on testers.betaskintech.com
+- [ ] Merge PR #15 after QA approval
+- [ ] Future: add background image/video picker (bg-layer z-0 is ready)
+
+
 ## 2024-12-31: Branch Consolidation + Claude Code Setup
 
 ### Branch Consolidation

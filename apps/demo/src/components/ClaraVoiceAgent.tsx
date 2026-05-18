@@ -606,41 +606,97 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // === DIAGNOSTIC: Log ALL ElevenLabs agent events ===
+  // === DIAGNOSTIC: Log ALL SDK agent events (exhaustive) ===
   useEffect(() => {
     const session = sessionRef.current;
     if (!session) return;
 
-    // Listen for ELEVENLABS_AGENT_EVENT — critical for understanding agent state
-    const onElevenLabsEvent = (event: Record<string, unknown>) => {
-      console.log(
-        "[EL-EVENT]",
-        event.elevenlabs_event_type,
-        JSON.stringify(event.data || {}).slice(0, 200),
-      );
-      sendServerLog(
-        `[EL-EVENT] ${event.elevenlabs_event_type}: ${JSON.stringify(event.data || {}).slice(0, 150)}`,
-      );
+    // Helper: log event to console + server
+    const logEvt = (tag: string, e?: unknown) => {
+      const summary =
+        e && typeof e === "object"
+          ? JSON.stringify(e).slice(0, 250)
+          : String(e ?? "");
+      console.log(`[EVT] ${tag}`, summary);
+      sendServerLog(`[EVT] ${tag} ${summary}`.slice(0, 200));
     };
 
-    // Log ALL known agent events for complete visibility
-    const onUserSpeakStarted = (e: Record<string, unknown>) => {
-      console.log("[EVENT] USER_SPEAK_STARTED", e);
-      sendServerLog("[EVENT] USER_SPEAK_STARTED");
-    };
-    const onSessionStopped = (e: Record<string, unknown>) => {
-      console.log("[EVENT] SESSION_STOPPED", e);
-      sendServerLog(`[EVENT] SESSION_STOPPED: ${JSON.stringify(e)}`);
-    };
+    // Listen for EVERY known AgentEventsEnum
+    const handlers: Array<[string, (...args: unknown[]) => void]> = [
+      [
+        AgentEventsEnum.ELEVENLABS_AGENT_EVENT,
+        (e: unknown) => {
+          const ev = e as Record<string, unknown>;
+          logEvt(`EL:${ev.elevenlabs_event_type}`, ev.data);
+        },
+      ],
+      [AgentEventsEnum.USER_SPEAK_STARTED, () => logEvt("USER_SPEAK_STARTED")],
+      [AgentEventsEnum.USER_SPEAK_ENDED, () => logEvt("USER_SPEAK_ENDED")],
+      [
+        AgentEventsEnum.USER_TRANSCRIPTION,
+        (e: unknown) => logEvt("USER_TRANSCRIPTION", e),
+      ],
+      [
+        AgentEventsEnum.USER_TRANSCRIPTION_CHUNK,
+        (e: unknown) => logEvt("USER_TX_CHUNK", e),
+      ],
+      [
+        AgentEventsEnum.AVATAR_SPEAK_STARTED,
+        () => logEvt("AVATAR_SPEAK_STARTED"),
+      ],
+      [AgentEventsEnum.AVATAR_SPEAK_ENDED, () => logEvt("AVATAR_SPEAK_ENDED")],
+      [
+        AgentEventsEnum.AVATAR_TRANSCRIPTION,
+        (e: unknown) => logEvt("AVATAR_TX", e),
+      ],
+      [
+        AgentEventsEnum.AVATAR_TRANSCRIPTION_CHUNK,
+        (e: unknown) => logEvt("AVATAR_TX_CHUNK", e),
+      ],
+      [
+        AgentEventsEnum.SESSION_STOPPED,
+        (e: unknown) => logEvt("SESSION_STOPPED", e),
+      ],
+    ];
 
-    session.on(AgentEventsEnum.ELEVENLABS_AGENT_EVENT, onElevenLabsEvent);
-    session.on(AgentEventsEnum.USER_SPEAK_STARTED, onUserSpeakStarted);
-    session.on(AgentEventsEnum.SESSION_STOPPED, onSessionStopped);
+    for (const [evt, handler] of handlers) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      session.on(evt as any, handler as any);
+    }
+
+    // CRITICAL: Catch-all for ANY emitted event (EventEmitter wildcard via monkeypatch)
+    // This will show us if events arrive with unexpected names
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sessionAny = session as any;
+    const origEmit = sessionAny.emit.bind(session);
+    sessionAny.emit = (event: string, ...args: unknown[]) => {
+      // Only log agent-related events, skip noisy internal ones
+      if (
+        typeof event === "string" &&
+        !event.startsWith("session.state") &&
+        !event.startsWith("voicechat")
+      ) {
+        console.log(
+          `[EMIT] ${event}`,
+          args[0] ? JSON.stringify(args[0]).slice(0, 150) : "",
+        );
+        sendServerLog(
+          `[EMIT] ${event} ${args[0] ? JSON.stringify(args[0]).slice(0, 100) : ""}`.slice(
+            0,
+            200,
+          ),
+        );
+      }
+      return origEmit(event, ...args);
+    };
 
     return () => {
-      session.off(AgentEventsEnum.ELEVENLABS_AGENT_EVENT, onElevenLabsEvent);
-      session.off(AgentEventsEnum.USER_SPEAK_STARTED, onUserSpeakStarted);
-      session.off(AgentEventsEnum.SESSION_STOPPED, onSessionStopped);
+      for (const [evt, handler] of handlers) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        session.off(evt as any, handler as any);
+      }
+      // Restore original emit
+      sessionAny.emit = origEmit;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

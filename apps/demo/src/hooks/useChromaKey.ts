@@ -108,8 +108,31 @@ function applyChromaKey(imageData: ImageData, opts: ChromaKeyOptions): void {
       const alphaValue = Math.max(0, 1 - greenness * edgeSharpness);
 
       data[i + 3] = Math.round(alphaValue * 255);
+
+      // === GREEN SPILL SUPPRESSION ===
+      // Semi-transparent pixels at edges retain green tint (white/green dots).
+      // Desaturate green channel proportionally to transparency.
+      if (alphaValue > 0 && alphaValue < 1) {
+        const maxRB = Math.max(r, b);
+        // Pull green down toward the average of R and B to kill green fringe
+        data[i + 1] = Math.round(g * alphaValue + maxRB * (1 - alphaValue));
+      }
     }
-    // else: keep original pixel unchanged
+    // === CATCH NEAR-GREEN PIXELS (low saturation green that slips past) ===
+    // These cause the "white dots" — desaturated green pixels in hair/clothing edges
+    else if (
+      h >= minHue &&
+      h <= maxHue &&
+      s >= minSaturation * 0.3 &&
+      s < minSaturation
+    ) {
+      // These are borderline pixels — make them slightly transparent
+      const greenness = (g - Math.max(r, b)) / (g || 1);
+      if (greenness > 0.05) {
+        const alpha = Math.max(0.3, 1 - greenness * edgeSharpness * 0.5);
+        data[i + 3] = Math.min(data[i + 3]!, Math.round(alpha * 255));
+      }
+    }
   }
 }
 

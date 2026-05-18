@@ -487,37 +487,52 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
         await new Promise((r) => setTimeout(r, 200));
       }
 
-      // Step 2: Start voice chat (publishes mic to LiveKit) — once only
-      // On mobile, voiceChat.start() can fail silently — retry up to 3 times
+      // Step 2: Start voice chat (publishes mic to LiveKit)
+      // CRITICAL: voiceChat.start() returns silently (no throw) when the LiveKit
+      // room isn't connected yet. We must check voiceChat.state after each attempt
+      // and retry with a delay until it reaches ACTIVE.
       if (!hasStartedVoiceChatRef.current) {
         hasStartedVoiceChatRef.current = true;
-        const maxRetries = 3;
+        const maxRetries = 5;
         let started = false;
 
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
           try {
             console.log(
-              `[PLUGIN] Starting voiceChat (attempt ${attempt}/${maxRetries})`,
+              `[PLUGIN] Starting voiceChat (attempt ${attempt}/${maxRetries}), current state: ${session.voiceChat.state}`,
             );
             await session.voiceChat.start({ defaultMuted: false });
-            console.log("[PLUGIN] VoiceChat started successfully");
-            started = true;
-            break;
+
+            // voiceChat.start() may return without error but NOT actually start
+            // (e.g., room not connected yet). Check state to verify.
+            if (session.voiceChat.state === "ACTIVE") {
+              console.log("[PLUGIN] VoiceChat confirmed ACTIVE ✓");
+              started = true;
+              break;
+            } else {
+              console.warn(
+                `[PLUGIN] voiceChat.start() returned but state is "${session.voiceChat.state}" — room may not be ready`,
+              );
+            }
           } catch (err) {
             console.error(
-              `[PLUGIN] voiceChat.start() attempt ${attempt} failed:`,
+              `[PLUGIN] voiceChat.start() attempt ${attempt} threw:`,
               err,
             );
-            if (attempt < maxRetries) {
-              // Wait before retrying (longer on each attempt)
-              await new Promise((r) => setTimeout(r, 500 * attempt));
-            }
+          }
+
+          if (attempt < maxRetries) {
+            // Exponential backoff: 800ms, 1600ms, 2400ms, 3200ms
+            const delay = 800 * attempt;
+            console.log(`[PLUGIN] Retrying voiceChat.start() in ${delay}ms...`);
+            await new Promise((r) => setTimeout(r, delay));
           }
         }
 
         if (!started) {
           console.error(
-            "[PLUGIN] voiceChat.start() failed after all retries — mic not publishing",
+            "[PLUGIN] voiceChat.start() failed after all retries — mic not publishing. State:",
+            session.voiceChat.state,
           );
           hasStartedVoiceChatRef.current = false; // Allow future retry
         }

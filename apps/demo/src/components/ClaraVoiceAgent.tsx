@@ -488,17 +488,88 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
     [isDesktop],
   );
 
-  // === PLUGIN INIT: contextual_update → voiceChat.start() ===
-  // Deps include customerData so late-arriving Shopify data still gets sent.
-  // hasSentContextRef prevents duplicate sends and duplicate voiceChat.start().
+  // === PLUGIN INIT: voiceChat verify → wait for greeting → contextual_update ===
+  // IMPORTANT: Do NOT send contextual_update before the greeting finishes.
+  // Sending commands too early can cause the ElevenLabs agent to reinitialize,
+  // creating multiple simultaneous conversations (observed: 3 conversations
+  // with 3 separate greetings, none responding to user input afterward).
+  //
+  // Flow: streamReady → verify mic → wait for AVATAR_SPEAK_ENDED → send context
   const hasStartedVoiceChatRef = useRef(false);
+  const greetingFinishedRef = useRef(false);
 
+  // Step 1: On streamReady, verify voiceChat is active + unmuted (NO commands sent yet)
   useEffect(() => {
     const session = sessionRef.current;
     if (!isStreamReady || !session) return;
 
-    const initPlugin = async () => {
-      // Step 1: Send customer context (if available, one-time)
+    if (!hasStartedVoiceChatRef.current) {
+      hasStartedVoiceChatRef.current = true;
+
+      const vcState = session.voiceChat.state;
+      const vcMuted = session.voiceChat.isMuted;
+
+      console.log(`[PLUGIN] voiceChat state="${vcState}", isMuted=${vcMuted}`);
+      sendServerLog(
+        `[PLUGIN] voiceChat state="${vcState}", isMuted=${vcMuted}`,
+      );
+
+      if (vcState === "ACTIVE") {
+        console.log("[PLUGIN] VoiceChat already ACTIVE (SDK auto-started) ✓");
+        if (vcMuted) {
+          console.log("[PLUGIN] Mic is muted, unmuting...");
+          sendServerLog("[PLUGIN] Mic was MUTED — unmuting now");
+          session.voiceChat
+            .unmute()
+            .then(() => {
+              console.log("[PLUGIN] Mic unmuted ✓");
+              sendServerLog("[PLUGIN] Mic unmuted successfully ✓");
+            })
+            .catch((err: unknown) => {
+              console.error("[PLUGIN] Failed to unmute:", err);
+              sendServerLog(`[PLUGIN] Failed to unmute: ${err}`, "error");
+            });
+        } else {
+          console.log("[PLUGIN] Mic is already unmuted ✓");
+          sendServerLog("[PLUGIN] Mic already unmuted ✓");
+        }
+      } else {
+        console.log("[PLUGIN] VoiceChat not active, starting...");
+        sendServerLog(
+          `[PLUGIN] VoiceChat not active (${vcState}), starting manually`,
+        );
+        session.voiceChat
+          .start({ defaultMuted: false })
+          .then(() => {
+            console.log(
+              `[PLUGIN] voiceChat.start() done, state="${session.voiceChat.state}"`,
+            );
+            sendServerLog(
+              `[PLUGIN] voiceChat.start() done, state="${session.voiceChat.state}"`,
+            );
+          })
+          .catch((err: unknown) => {
+            console.error("[PLUGIN] voiceChat.start() failed:", err);
+            sendServerLog(`[PLUGIN] voiceChat.start() FAILED: ${err}`, "error");
+            hasStartedVoiceChatRef.current = false;
+          });
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isStreamReady]);
+
+  // Step 2: Wait for greeting to finish, THEN send customer context
+  useEffect(() => {
+    const session = sessionRef.current;
+    if (!session) return;
+
+    const onGreetingDone = () => {
+      if (greetingFinishedRef.current) return;
+      greetingFinishedRef.current = true;
+      console.log("[PLUGIN] Greeting finished — now safe to send context");
+      sendServerLog("[PLUGIN] Greeting done, sending context");
+
+      // Send customer context AFTER greeting (avoids agent reinitialization)
       if (!hasSentContextRef.current && customerData) {
         hasSentContextRef.current = true;
         console.log("[PLUGIN] Sending customer context via contextual_update");
@@ -510,71 +581,16 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
           skinConcerns: customerData.skinConcerns,
           ordersCount: customerData.ordersCount,
         });
-        // Small delay to ensure context arrives before mic audio
-        await new Promise((r) => setTimeout(r, 200));
-      }
-
-      // Step 2: Ensure voice chat is active and unmuted
-      // The SDK auto-starts voiceChat when config.voiceChat=true.
-      // We just need to verify it's ACTIVE and UNMUTED.
-      if (!hasStartedVoiceChatRef.current) {
-        hasStartedVoiceChatRef.current = true;
-
-        const vcState = session.voiceChat.state;
-        const vcMuted = session.voiceChat.isMuted;
-
-        console.log(
-          `[PLUGIN] voiceChat state="${vcState}", isMuted=${vcMuted}`,
-        );
-        sendServerLog(
-          `[PLUGIN] voiceChat state="${vcState}", isMuted=${vcMuted}`,
-        );
-
-        if (vcState === "ACTIVE") {
-          console.log("[PLUGIN] VoiceChat already ACTIVE (SDK auto-started) ✓");
-          // CRITICAL: Ensure mic is unmuted — SDK may auto-start with default mute
-          if (vcMuted) {
-            console.log("[PLUGIN] Mic is muted, unmuting...");
-            sendServerLog("[PLUGIN] Mic was MUTED — unmuting now");
-            try {
-              await session.voiceChat.unmute();
-              console.log("[PLUGIN] Mic unmuted ✓");
-              sendServerLog("[PLUGIN] Mic unmuted successfully ✓");
-            } catch (err) {
-              console.error("[PLUGIN] Failed to unmute:", err);
-              sendServerLog(`[PLUGIN] Failed to unmute: ${err}`, "error");
-            }
-          } else {
-            console.log("[PLUGIN] Mic is already unmuted ✓");
-            sendServerLog("[PLUGIN] Mic already unmuted ✓");
-          }
-        } else {
-          // VoiceChat not active yet — try to start it
-          console.log("[PLUGIN] VoiceChat not active, starting...");
-          sendServerLog(
-            `[PLUGIN] VoiceChat not active (${vcState}), starting manually`,
-          );
-          try {
-            await session.voiceChat.start({ defaultMuted: false });
-            const postState = session.voiceChat.state;
-            console.log(
-              `[PLUGIN] voiceChat.start() done, state="${postState}"`,
-            );
-            sendServerLog(
-              `[PLUGIN] voiceChat.start() done, state="${postState}"`,
-            );
-          } catch (err) {
-            console.error("[PLUGIN] voiceChat.start() failed:", err);
-            sendServerLog(`[PLUGIN] voiceChat.start() FAILED: ${err}`, "error");
-            hasStartedVoiceChatRef.current = false;
-          }
-        }
       }
     };
 
-    initPlugin();
+    session.on(AgentEventsEnum.AVATAR_SPEAK_ENDED, onGreetingDone);
+
+    return () => {
+      session.off(AgentEventsEnum.AVATAR_SPEAK_ENDED, onGreetingDone);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isStreamReady, customerData]);
+  }, [customerData]);
 
   // === DIAGNOSTIC: Periodic mic state monitoring ===
   useEffect(() => {

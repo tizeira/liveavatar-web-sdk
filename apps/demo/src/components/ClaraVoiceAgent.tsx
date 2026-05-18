@@ -465,7 +465,8 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
   // Send critical client-side logs to /api/client-log so they appear in Vercel Runtime Logs
   const sendServerLog = useCallback(
     (message: string, level: "info" | "warn" | "error" = "info") => {
-      if (process.env.NODE_ENV === "production") return;
+      // NEXT_PUBLIC_VERCEL_ENV is available client-side; skip only in actual production
+      if (process.env.NEXT_PUBLIC_VERCEL_ENV === "production") return;
       const device = isDesktop ? "desktop" : "mobile";
       fetch("/api/client-log", {
         method: "POST",
@@ -1012,9 +1013,11 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
         </div>
       )}
 
-      {process.env.NODE_ENV !== "production" && (
-        <MobileLogger filter="[PLUGIN]|[EL-CMD]|[VOICECHAT]|[STATE]|[MIC]|Voice chat|voiceChat|VoiceChat|createLocalAudioTrack|getUserMedia|ACTIVE|INACTIVE|STARTING" />
-      )}
+      {/* MobileLogger: show on Vercel Preview or local dev.
+          NEXT_PUBLIC_VERCEL_ENV is "preview"|"production"|"development".
+          NODE_ENV is always "production" on Vercel (even Preview). */}
+      {(process.env.NEXT_PUBLIC_VERCEL_ENV === "preview" ||
+        process.env.NODE_ENV !== "production") && <MobileLogger filter="" />}
 
       {!sessionToken ? (
         <LandingScreen

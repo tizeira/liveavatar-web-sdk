@@ -7,8 +7,9 @@
 import { NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest) {
-  // Only allow in preview/development
-  if (process.env.NODE_ENV === "production") {
+  // Only allow in preview/development (VERCEL_ENV distinguishes preview from production on Vercel)
+  const vercelEnv = process.env.VERCEL_ENV || process.env.NODE_ENV;
+  if (vercelEnv === "production") {
     return NextResponse.json({ ok: false }, { status: 403 });
   }
 

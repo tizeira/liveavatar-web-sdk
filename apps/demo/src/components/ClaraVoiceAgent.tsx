@@ -606,6 +606,45 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // === DIAGNOSTIC: Log ALL ElevenLabs agent events ===
+  useEffect(() => {
+    const session = sessionRef.current;
+    if (!session) return;
+
+    // Listen for ELEVENLABS_AGENT_EVENT — critical for understanding agent state
+    const onElevenLabsEvent = (event: Record<string, unknown>) => {
+      console.log(
+        "[EL-EVENT]",
+        event.elevenlabs_event_type,
+        JSON.stringify(event.data || {}).slice(0, 200),
+      );
+      sendServerLog(
+        `[EL-EVENT] ${event.elevenlabs_event_type}: ${JSON.stringify(event.data || {}).slice(0, 150)}`,
+      );
+    };
+
+    // Log ALL known agent events for complete visibility
+    const onUserSpeakStarted = (e: Record<string, unknown>) => {
+      console.log("[EVENT] USER_SPEAK_STARTED", e);
+      sendServerLog("[EVENT] USER_SPEAK_STARTED");
+    };
+    const onSessionStopped = (e: Record<string, unknown>) => {
+      console.log("[EVENT] SESSION_STOPPED", e);
+      sendServerLog(`[EVENT] SESSION_STOPPED: ${JSON.stringify(e)}`);
+    };
+
+    session.on(AgentEventsEnum.ELEVENLABS_AGENT_EVENT, onElevenLabsEvent);
+    session.on(AgentEventsEnum.USER_SPEAK_STARTED, onUserSpeakStarted);
+    session.on(AgentEventsEnum.SESSION_STOPPED, onSessionStopped);
+
+    return () => {
+      session.off(AgentEventsEnum.ELEVENLABS_AGENT_EVENT, onElevenLabsEvent);
+      session.off(AgentEventsEnum.USER_SPEAK_STARTED, onUserSpeakStarted);
+      session.off(AgentEventsEnum.SESSION_STOPPED, onSessionStopped);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // === UI STATE: Derive "thinking" from SDK events ===
   useEffect(() => {
     const session = sessionRef.current;

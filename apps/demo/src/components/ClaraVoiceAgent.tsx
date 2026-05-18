@@ -461,6 +461,23 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
   // Track if customer context has been sent (one-time per session)
   const hasSentContextRef = useRef(false);
 
+  // === SERVER LOG RELAY (mobile debugging) ===
+  // Send critical client-side logs to /api/client-log so they appear in Vercel Runtime Logs
+  const sendServerLog = useCallback(
+    (message: string, level: "info" | "warn" | "error" = "info") => {
+      if (process.env.NODE_ENV === "production") return;
+      const device = isDesktop ? "desktop" : "mobile";
+      fetch("/api/client-log", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          logs: [{ message, level, device, ts: Date.now() }],
+        }),
+      }).catch(() => {}); // Fire and forget
+    },
+    [isDesktop],
+  );
+
   // === PLUGIN INIT: contextual_update → voiceChat.start() ===
   // Deps include customerData so late-arriving Shopify data still gets sent.
   // hasSentContextRef prevents duplicate sends and duplicate voiceChat.start().
@@ -496,33 +513,55 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
         const maxRetries = 5;
         let started = false;
 
+        sendServerLog(
+          `[PLUGIN] initPlugin: voiceChat initial state="${session.voiceChat.state}", isMuted=${session.voiceChat.isMuted}`,
+        );
+
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
           try {
+            const preState = session.voiceChat.state;
             console.log(
-              `[PLUGIN] Starting voiceChat (attempt ${attempt}/${maxRetries}), current state: ${session.voiceChat.state}`,
+              `[PLUGIN] Starting voiceChat (attempt ${attempt}/${maxRetries}), state: ${preState}`,
             );
+            sendServerLog(
+              `[PLUGIN] voiceChat.start() attempt ${attempt}/${maxRetries}, pre-state="${preState}"`,
+            );
+
             await session.voiceChat.start({ defaultMuted: false });
 
+            const postState = session.voiceChat.state;
+            sendServerLog(
+              `[PLUGIN] voiceChat.start() returned, post-state="${postState}"`,
+            );
+
             // voiceChat.start() may return without error but NOT actually start
-            // (e.g., room not connected yet). Check state to verify.
-            if (session.voiceChat.state === "ACTIVE") {
+            if (postState === "ACTIVE") {
               console.log("[PLUGIN] VoiceChat confirmed ACTIVE ✓");
+              sendServerLog("[PLUGIN] VoiceChat confirmed ACTIVE ✓");
               started = true;
               break;
             } else {
               console.warn(
-                `[PLUGIN] voiceChat.start() returned but state is "${session.voiceChat.state}" — room may not be ready`,
+                `[PLUGIN] voiceChat.start() returned but state is "${postState}"`,
+              );
+              sendServerLog(
+                `[PLUGIN] WARNING: voiceChat.start() returned but state="${postState}" — NOT active`,
+                "warn",
               );
             }
           } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
             console.error(
               `[PLUGIN] voiceChat.start() attempt ${attempt} threw:`,
               err,
             );
+            sendServerLog(
+              `[PLUGIN] voiceChat.start() attempt ${attempt} THREW: ${errMsg}`,
+              "error",
+            );
           }
 
           if (attempt < maxRetries) {
-            // Exponential backoff: 800ms, 1600ms, 2400ms, 3200ms
             const delay = 800 * attempt;
             console.log(`[PLUGIN] Retrying voiceChat.start() in ${delay}ms...`);
             await new Promise((r) => setTimeout(r, delay));
@@ -530,11 +569,16 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
         }
 
         if (!started) {
+          const finalState = session.voiceChat.state;
           console.error(
-            "[PLUGIN] voiceChat.start() failed after all retries — mic not publishing. State:",
-            session.voiceChat.state,
+            "[PLUGIN] voiceChat.start() failed after all retries. State:",
+            finalState,
           );
-          hasStartedVoiceChatRef.current = false; // Allow future retry
+          sendServerLog(
+            `[PLUGIN] FAILED after ${maxRetries} retries. Final state="${finalState}"`,
+            "error",
+          );
+          hasStartedVoiceChatRef.current = false;
         }
       }
     };
@@ -894,40 +938,11 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
     }
   }, [rateLimitCountdown]);
 
-  // Pre-warm microphone permission before starting session.
-  // On mobile, getUserMedia must happen close to a user gesture or it may fail.
-  // We request + immediately release the mic so the browser remembers the grant.
-  const prewarmMicrophone = useCallback(async () => {
-    try {
-      console.log("[MIC] Pre-warming microphone permission...");
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      // Stop tracks immediately — we just need the permission grant
-      stream.getTracks().forEach((t) => t.stop());
-      console.log("[MIC] Microphone permission granted");
-      return true;
-    } catch (err) {
-      console.error("[MIC] Microphone permission denied:", err);
-      return false;
-    }
-  }, []);
-
   const handleStartCall = useCallback(async () => {
     setIsStarting(true);
     setError(null);
 
     try {
-      // Step 0: Pre-warm mic on mobile (must happen in user gesture context)
-      if (!isDesktop) {
-        const micOk = await prewarmMicrophone();
-        if (!micOk) {
-          setError(
-            "Se necesita acceso al micrófono para hablar con Clara. Por favor permite el acceso e intenta de nuevo.",
-          );
-          setIsStarting(false);
-          return;
-        }
-      }
-
       // Use LITE mode with ElevenLabs Plugin (HeyGen handles STT/LLM/TTS server-side)
       const res = await fetch("/api/start-custom-session", {
         method: "POST",
@@ -969,7 +984,7 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
     } finally {
       setIsStarting(false);
     }
-  }, [isDesktop, prewarmMicrophone]);
+  }, [isDesktop]);
 
   const handleSessionStopped = useCallback(() => {
     setSessionToken(null);
@@ -998,7 +1013,7 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
       )}
 
       {process.env.NODE_ENV !== "production" && (
-        <MobileLogger filter="[PLUGIN]|[EL-CMD]|[VOICECHAT]|[STATE]" />
+        <MobileLogger filter="[PLUGIN]|[EL-CMD]|[VOICECHAT]|[STATE]|[MIC]|Voice chat|voiceChat|VoiceChat|createLocalAudioTrack|getUserMedia|ACTIVE|INACTIVE|STARTING" />
       )}
 
       {!sessionToken ? (

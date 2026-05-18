@@ -41,7 +41,16 @@ import { Skeleton } from "./ui/skeleton";
 import Image from "next/image";
 
 // Lucide icons
-import { Phone, PhoneOff, Mic, MicOff, Loader2, Clock } from "lucide-react";
+import {
+  Phone,
+  PhoneOff,
+  Mic,
+  MicOff,
+  Loader2,
+  Clock,
+  MessageSquare,
+  Bug,
+} from "lucide-react";
 
 // Toast notifications
 import { toast } from "sonner";
@@ -505,81 +514,60 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
         await new Promise((r) => setTimeout(r, 200));
       }
 
-      // Step 2: Start voice chat (publishes mic to LiveKit)
-      // CRITICAL: voiceChat.start() returns silently (no throw) when the LiveKit
-      // room isn't connected yet. We must check voiceChat.state after each attempt
-      // and retry with a delay until it reaches ACTIVE.
+      // Step 2: Ensure voice chat is active and unmuted
+      // The SDK auto-starts voiceChat when config.voiceChat=true.
+      // We just need to verify it's ACTIVE and UNMUTED.
       if (!hasStartedVoiceChatRef.current) {
         hasStartedVoiceChatRef.current = true;
-        const maxRetries = 5;
-        let started = false;
 
+        const vcState = session.voiceChat.state;
+        const vcMuted = session.voiceChat.isMuted;
+
+        console.log(
+          `[PLUGIN] voiceChat state="${vcState}", isMuted=${vcMuted}`,
+        );
         sendServerLog(
-          `[PLUGIN] initPlugin: voiceChat initial state="${session.voiceChat.state}", isMuted=${session.voiceChat.isMuted}`,
+          `[PLUGIN] voiceChat state="${vcState}", isMuted=${vcMuted}`,
         );
 
-        for (let attempt = 1; attempt <= maxRetries; attempt++) {
-          try {
-            const preState = session.voiceChat.state;
-            console.log(
-              `[PLUGIN] Starting voiceChat (attempt ${attempt}/${maxRetries}), state: ${preState}`,
-            );
-            sendServerLog(
-              `[PLUGIN] voiceChat.start() attempt ${attempt}/${maxRetries}, pre-state="${preState}"`,
-            );
-
-            await session.voiceChat.start({ defaultMuted: false });
-
-            const postState = session.voiceChat.state;
-            sendServerLog(
-              `[PLUGIN] voiceChat.start() returned, post-state="${postState}"`,
-            );
-
-            // voiceChat.start() may return without error but NOT actually start
-            if (postState === "ACTIVE") {
-              console.log("[PLUGIN] VoiceChat confirmed ACTIVE ✓");
-              sendServerLog("[PLUGIN] VoiceChat confirmed ACTIVE ✓");
-              started = true;
-              break;
-            } else {
-              console.warn(
-                `[PLUGIN] voiceChat.start() returned but state is "${postState}"`,
-              );
-              sendServerLog(
-                `[PLUGIN] WARNING: voiceChat.start() returned but state="${postState}" — NOT active`,
-                "warn",
-              );
+        if (vcState === "ACTIVE") {
+          console.log("[PLUGIN] VoiceChat already ACTIVE (SDK auto-started) ✓");
+          // CRITICAL: Ensure mic is unmuted — SDK may auto-start with default mute
+          if (vcMuted) {
+            console.log("[PLUGIN] Mic is muted, unmuting...");
+            sendServerLog("[PLUGIN] Mic was MUTED — unmuting now");
+            try {
+              await session.voiceChat.unmute();
+              console.log("[PLUGIN] Mic unmuted ✓");
+              sendServerLog("[PLUGIN] Mic unmuted successfully ✓");
+            } catch (err) {
+              console.error("[PLUGIN] Failed to unmute:", err);
+              sendServerLog(`[PLUGIN] Failed to unmute: ${err}`, "error");
             }
-          } catch (err) {
-            const errMsg = err instanceof Error ? err.message : String(err);
-            console.error(
-              `[PLUGIN] voiceChat.start() attempt ${attempt} threw:`,
-              err,
+          } else {
+            console.log("[PLUGIN] Mic is already unmuted ✓");
+            sendServerLog("[PLUGIN] Mic already unmuted ✓");
+          }
+        } else {
+          // VoiceChat not active yet — try to start it
+          console.log("[PLUGIN] VoiceChat not active, starting...");
+          sendServerLog(
+            `[PLUGIN] VoiceChat not active (${vcState}), starting manually`,
+          );
+          try {
+            await session.voiceChat.start({ defaultMuted: false });
+            const postState = session.voiceChat.state;
+            console.log(
+              `[PLUGIN] voiceChat.start() done, state="${postState}"`,
             );
             sendServerLog(
-              `[PLUGIN] voiceChat.start() attempt ${attempt} THREW: ${errMsg}`,
-              "error",
+              `[PLUGIN] voiceChat.start() done, state="${postState}"`,
             );
+          } catch (err) {
+            console.error("[PLUGIN] voiceChat.start() failed:", err);
+            sendServerLog(`[PLUGIN] voiceChat.start() FAILED: ${err}`, "error");
+            hasStartedVoiceChatRef.current = false;
           }
-
-          if (attempt < maxRetries) {
-            const delay = 800 * attempt;
-            console.log(`[PLUGIN] Retrying voiceChat.start() in ${delay}ms...`);
-            await new Promise((r) => setTimeout(r, delay));
-          }
-        }
-
-        if (!started) {
-          const finalState = session.voiceChat.state;
-          console.error(
-            "[PLUGIN] voiceChat.start() failed after all retries. State:",
-            finalState,
-          );
-          sendServerLog(
-            `[PLUGIN] FAILED after ${maxRetries} retries. Final state="${finalState}"`,
-            "error",
-          );
-          hasStartedVoiceChatRef.current = false;
         }
       }
     };
@@ -587,6 +575,36 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
     initPlugin();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isStreamReady, customerData]);
+
+  // === DIAGNOSTIC: Periodic mic state monitoring ===
+  useEffect(() => {
+    const session = sessionRef.current;
+    if (!isStreamReady || !session) return;
+
+    const diagInterval = setInterval(() => {
+      const vc = session.voiceChat;
+      console.log(`[DIAG] voiceChat: state=${vc.state}, isMuted=${vc.isMuted}`);
+    }, 10000); // Every 10s
+
+    return () => clearInterval(diagInterval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isStreamReady]);
+
+  // === DIAGNOSTIC: Test ElevenLabs agent with text message ===
+  const handleTestAgent = useCallback(() => {
+    const session = sessionRef.current;
+    if (!session) return;
+    try {
+      console.log("[DIAG] Sending test message via sendUserMessage...");
+      session.sendUserMessage("Hola, me puedes escuchar?");
+      console.log("[DIAG] sendUserMessage sent ✓");
+      sendServerLog("[DIAG] Test sendUserMessage sent");
+    } catch (err) {
+      console.error("[DIAG] sendUserMessage failed:", err);
+      sendServerLog(`[DIAG] sendUserMessage FAILED: ${err}`, "error");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // === UI STATE: Derive "thinking" from SDK events ===
   useEffect(() => {
@@ -801,6 +819,37 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
               {/* Spacer for symmetry */}
               {isStreamReady && <div className="w-11" />}
             </div>
+
+            {/* DIAGNOSTIC BUTTONS — only in preview/dev */}
+            {(process.env.NEXT_PUBLIC_VERCEL_ENV === "preview" ||
+              process.env.NODE_ENV !== "production") && (
+              <div className="flex items-center justify-center gap-2 mt-2">
+                <Button
+                  onClick={handleTestAgent}
+                  variant="outline"
+                  size="sm"
+                  className="text-xs bg-yellow-100 border-yellow-300 hover:bg-yellow-200"
+                >
+                  <MessageSquare className="w-3 h-3 mr-1" />
+                  Test Agent (text)
+                </Button>
+                <Button
+                  onClick={() => {
+                    const vc = sessionRef.current?.voiceChat;
+                    if (!vc) return;
+                    const msg = `state=${vc.state}, muted=${vc.isMuted}`;
+                    console.log(`[DIAG] Manual check: ${msg}`);
+                    alert(`VoiceChat: ${msg}`);
+                  }}
+                  variant="outline"
+                  size="sm"
+                  className="text-xs bg-blue-100 border-blue-300 hover:bg-blue-200"
+                >
+                  <Bug className="w-3 h-3 mr-1" />
+                  Mic Status
+                </Button>
+              </div>
+            )}
           </div>
         </div>
       </div>

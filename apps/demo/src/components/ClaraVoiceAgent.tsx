@@ -56,6 +56,13 @@ import {
 import { toast } from "sonner";
 
 // ============================================
+// DEBUG UI TOGGLE
+// ============================================
+// Set to true to show debug UI (Test Agent button, Mic Status button, MobileLogger).
+// Keep false in production. Diagnostic event logging in console stays regardless.
+const DEBUG_UI = false;
+
+// ============================================
 // SESSION LIMIT CONFIGURATION
 // ============================================
 // Toggle: false = no limit (beta), true = enforce limit (production)
@@ -931,9 +938,8 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
               {isStreamReady && <div className="w-11" />}
             </div>
 
-            {/* DIAGNOSTIC BUTTONS — only in preview/dev */}
-            {(process.env.NEXT_PUBLIC_VERCEL_ENV === "preview" ||
-              process.env.NODE_ENV !== "production") && (
+            {/* DIAGNOSTIC BUTTONS — hidden unless DEBUG_UI=true */}
+            {DEBUG_UI && (
               <div className="flex items-center justify-center gap-2 mt-2">
                 <Button
                   onClick={handleTestAgent}
@@ -1173,11 +1179,8 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
         </div>
       )}
 
-      {/* MobileLogger: show on Vercel Preview or local dev.
-          NEXT_PUBLIC_VERCEL_ENV is "preview"|"production"|"development".
-          NODE_ENV is always "production" on Vercel (even Preview). */}
-      {(process.env.NEXT_PUBLIC_VERCEL_ENV === "preview" ||
-        process.env.NODE_ENV !== "production") && <MobileLogger filter="" />}
+      {/* MobileLogger: hidden unless DEBUG_UI=true */}
+      {DEBUG_UI && <MobileLogger filter="" />}
 
       {!sessionToken ? (
         <LandingScreen

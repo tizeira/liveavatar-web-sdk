@@ -497,9 +497,11 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
   // creating multiple simultaneous conversations (observed: 3 conversations
   // with 3 separate greetings, none responding to user input afterward).
   //
-  // Flow: streamReady → verify mic → wait for AVATAR_SPEAK_ENDED → send context
+  // Flow: streamReady → verify mic → wait 1.5s for jitter buffer
+  //                  → contextual_update with triggerGreeting=true
+  //                  → agent generates personalized greeting
+  // REQUIRES: ElevenLabs agent dashboard → "First message" must be EMPTY.
   const hasStartedVoiceChatRef = useRef(false);
-  const greetingFinishedRef = useRef(false);
 
   // Step 1: On streamReady, verify voiceChat is active + unmuted (NO commands sent yet)
   useEffect(() => {
@@ -561,39 +563,48 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isStreamReady]);
 
-  // Step 2: Wait for greeting to finish, THEN send customer context
+  // Step 2: After streamReady, wait for WebRTC jitter buffer warm-up,
+  // then send contextual_update that triggers the greeting.
+  //
+  // REQUIRES: ElevenLabs agent dashboard → "First message" must be EMPTY.
+  // The client now controls when the greeting starts so it can't be cut off
+  // by WebRTC audio decoder warming up.
   useEffect(() => {
     const session = sessionRef.current;
-    if (!session) return;
+    if (!isStreamReady || !session) return;
+    if (hasSentContextRef.current) return;
 
-    const onGreetingDone = () => {
-      if (greetingFinishedRef.current) return;
-      greetingFinishedRef.current = true;
-      console.log("[PLUGIN] Greeting finished — now safe to send context");
-      sendServerLog("[PLUGIN] Greeting done, sending context");
+    // 1.5s delay = WebRTC audio jitter buffer typically warms up in 200-500ms,
+    // adding margin so the first word of the greeting plays cleanly.
+    const timer = setTimeout(() => {
+      if (hasSentContextRef.current) return;
+      hasSentContextRef.current = true;
 
-      // Send customer context AFTER greeting (avoids agent reinitialization)
-      if (!hasSentContextRef.current && customerData) {
-        hasSentContextRef.current = true;
-        console.log("[PLUGIN] Sending customer context via contextual_update");
-        sendCustomerContext(session, {
-          firstName: customerData.firstName,
-          lastName: customerData.lastName,
-          email: customerData.email,
-          skinType: customerData.skinType,
-          skinConcerns: customerData.skinConcerns,
-          ordersCount: customerData.ordersCount,
-        });
-      }
-    };
+      const firstName = customerData?.firstName;
+      console.log(
+        `[PLUGIN] Triggering personalized greeting (firstName=${firstName || "none"})`,
+      );
+      sendServerLog(
+        `[PLUGIN] Triggering greeting for ${firstName || "anonymous user"}`,
+      );
 
-    session.on(AgentEventsEnum.AVATAR_SPEAK_ENDED, onGreetingDone);
+      sendCustomerContext(
+        session,
+        {
+          firstName: customerData?.firstName,
+          lastName: customerData?.lastName,
+          email: customerData?.email,
+          skinType: customerData?.skinType,
+          skinConcerns: customerData?.skinConcerns,
+          ordersCount: customerData?.ordersCount,
+        },
+        { triggerGreeting: true },
+      );
+    }, 1500);
 
-    return () => {
-      session.off(AgentEventsEnum.AVATAR_SPEAK_ENDED, onGreetingDone);
-    };
+    return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [customerData]);
+  }, [isStreamReady, customerData]);
 
   // === DIAGNOSTIC: Periodic mic state monitoring ===
   useEffect(() => {

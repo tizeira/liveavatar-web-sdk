@@ -119,56 +119,71 @@ export default function Home() {
   }, []);
 
   // Verify customer via email (for users with session)
-  const verifySessionEmail = useCallback(async (email: string) => {
-    setPageState("verifying_session");
+  const verifySessionEmail = useCallback(
+    async (email: string) => {
+      setPageState("verifying_session");
 
-    try {
-      const response = await fetch("/api/verify-customer", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
-      });
-
-      const data = await response.json();
-
-      // Check for Shopify plan limitation (Basic plan can't access PII via API)
-      if (data.error === "SHOPIFY_PLAN_LIMITED") {
-        setError(
-          data.message ||
-            "Por favor accede a Clara desde tu cuenta en la tienda BetaSkintech",
-        );
-        setPageState("shopify_redirect");
-        return;
-      }
-
-      if (!response.ok) {
-        throw new Error(data.error || "Error verifying customer");
-      }
-
-      if (!data.exists || !data.hasOrders) {
-        // User has Google session but hasn't purchased
-        // Show verification screen so they can try another email
-        setPageState("needs_verification");
-        return;
-      }
-
-      if (data.customer) {
-        setCustomerData({
-          firstName: data.customer.firstName || undefined,
-          lastName: data.customer.lastName || undefined,
-          email: data.customer.email || undefined,
-          ordersCount: data.customer.ordersCount,
-          skinType: data.customer.skinType as CustomerData["skinType"],
-          skinConcerns: data.customer.skinConcerns,
+      try {
+        const response = await fetch("/api/verify-customer", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email }),
         });
-        setPageState("verified");
+
+        const data = await response.json();
+
+        // Check for Shopify plan limitation (Basic plan can't access PII via API)
+        if (data.error === "SHOPIFY_PLAN_LIMITED") {
+          setError(
+            data.message ||
+              "Por favor accede a Clara desde tu cuenta en la tienda BetaSkintech",
+          );
+          setPageState("shopify_redirect");
+          return;
+        }
+
+        if (!response.ok) {
+          throw new Error(data.error || "Error verifying customer");
+        }
+
+        if (!data.exists || !data.hasOrders) {
+          // User has Google session but hasn't purchased on Shopify yet.
+          // For testing/team usage: let them in with just their Google profile.
+          // Clara will greet them by name but skinType/orders data will be missing.
+          if (session?.user) {
+            setCustomerData({
+              firstName: session.user.name?.split(" ")[0] || undefined,
+              lastName:
+                session.user.name?.split(" ").slice(1).join(" ") || undefined,
+              email: session.user.email || undefined,
+            });
+            setPageState("verified");
+            return;
+          }
+          // No session at all → fall through to verification screen
+          setPageState("needs_verification");
+          return;
+        }
+
+        if (data.customer) {
+          setCustomerData({
+            firstName: data.customer.firstName || undefined,
+            lastName: data.customer.lastName || undefined,
+            email: data.customer.email || undefined,
+            ordersCount: data.customer.ordersCount,
+            skinType: data.customer.skinType as CustomerData["skinType"],
+            skinConcerns: data.customer.skinConcerns,
+          });
+          setPageState("verified");
+        }
+      } catch (err) {
+        console.error("Session verification error:", err);
+        // On error, let user try manual verification
+        setPageState("needs_verification");
       }
-    } catch (err) {
-      console.error("Session verification error:", err);
-      // On error, let user try manual verification
-      setPageState("needs_verification");
-    }
-  }, []);
+    },
+    [session?.user],
+  );
 
   // Main effect to handle page load and determine flow
   useEffect(() => {

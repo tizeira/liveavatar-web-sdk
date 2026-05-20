@@ -457,13 +457,61 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
   // Local state: "thinking" = between USER_SPEAK_ENDED and AVATAR_SPEAK_STARTED
   const [isThinking, setIsThinking] = useState(false);
 
-  // Mobile warm-up: brief overlay after stream ready so greeting doesn't appear mid-sentence.
-  // On mobile, video buffering is slower — this gives ~1.5s for the stream to stabilize.
-  const [isWarmingUp, setIsWarmingUp] = useState(!isDesktop);
+  // Warm-up overlay: hide the avatar until the greeting actually begins.
+  //
+  // Why: with the ElevenLabs plugin, HeyGen starts the conversation IMMEDIATELY
+  // after session.start() — the greeting audio can arrive 3-7s before the
+  // mobile video element finishes buffering. Result: user sees the avatar
+  // "mid-sentence" because they missed the first chunk of audio.
+  //
+  // Fix: keep the overlay visible until AVATAR_SPEAK_STARTED fires (first time).
+  // That event = audio is hitting the LiveKit room right now → unhide overlay
+  // so user sees + hears the greeting from its actual start, synced.
+  //
+  // Desktop usually has the video ready by the time the greeting starts, but
+  // we still apply the gate uniformly to keep behavior consistent.
+  const [isWarmingUp, setIsWarmingUp] = useState(true);
+  const warmupFallbackRef = useRef<NodeJS.Timeout | null>(null);
+
   useEffect(() => {
-    if (!isStreamReady || isDesktop) return;
-    const timer = setTimeout(() => setIsWarmingUp(false), 1500);
-    return () => clearTimeout(timer);
+    const session = sessionRef.current;
+    if (!session) return;
+
+    // First AVATAR_SPEAK_STARTED = greeting is beginning → reveal avatar
+    const onFirstSpeak = () => {
+      console.log("[WARMUP] Greeting started — revealing avatar");
+      setIsWarmingUp(false);
+      if (warmupFallbackRef.current) {
+        clearTimeout(warmupFallbackRef.current);
+        warmupFallbackRef.current = null;
+      }
+      session.off(AgentEventsEnum.AVATAR_SPEAK_STARTED, onFirstSpeak);
+    };
+
+    session.on(AgentEventsEnum.AVATAR_SPEAK_STARTED, onFirstSpeak);
+
+    return () => {
+      session.off(AgentEventsEnum.AVATAR_SPEAK_STARTED, onFirstSpeak);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Fallback: if greeting never fires (network issue, no opening_message),
+  // reveal anyway after 6s on desktop / 8s on mobile so the user isn't stuck.
+  useEffect(() => {
+    if (!isStreamReady) return;
+    const fallbackMs = isDesktop ? 6000 : 8000;
+    warmupFallbackRef.current = setTimeout(() => {
+      console.warn(
+        "[WARMUP] Fallback timeout — revealing avatar without speak event",
+      );
+      setIsWarmingUp(false);
+    }, fallbackMs);
+    return () => {
+      if (warmupFallbackRef.current) {
+        clearTimeout(warmupFallbackRef.current);
+      }
+    };
   }, [isStreamReady, isDesktop]);
 
   // Session limit
@@ -862,7 +910,8 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
       className="flex-1 flex flex-col items-center justify-center relative safe-area-all w-full"
       style={containerStyle}
     >
-      {/* Mobile warm-up overlay — hides video until stream has buffered enough frames */}
+      {/* Warm-up overlay — hides avatar until AVATAR_SPEAK_STARTED fires,
+          so the user sees + hears the greeting from its actual start (no cut-off). */}
       {isWarmingUp && (
         <div className="absolute inset-0 z-40 flex items-center justify-center bg-slate-50">
           <div className="text-center">

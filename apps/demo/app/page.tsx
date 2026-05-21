@@ -132,8 +132,23 @@ export default function Home() {
 
         const data = await response.json();
 
-        // Check for Shopify plan limitation (Basic plan can't access PII via API)
+        // Shopify Basic plan can't access PII via API.
+        // For testing/team usage: if user has a Google session, let them in
+        // with just their profile data — skip the "go to Shopify" redirect.
         if (data.error === "SHOPIFY_PLAN_LIMITED") {
+          if (session?.user) {
+            console.log(
+              "[AUTH] Shopify plan limited — bypassing with Google profile",
+            );
+            setCustomerData({
+              firstName: session.user.name?.split(" ")[0] || undefined,
+              lastName:
+                session.user.name?.split(" ").slice(1).join(" ") || undefined,
+              email: session.user.email || undefined,
+            });
+            setPageState("verified");
+            return;
+          }
           setError(
             data.message ||
               "Por favor accede a Clara desde tu cuenta en la tienda BetaSkintech",

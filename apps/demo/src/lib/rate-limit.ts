@@ -138,6 +138,7 @@ export async function rateLimitByEndpoint(
     "elevenlabs-conversation": { max: 10, windowSec: 60 * 60 }, // 10 per hour
     "verify-customer": { max: 10, windowSec: 5 * 60 }, // 10 per 5min
     "shopify-customer": { max: 10, windowSec: 5 * 60 }, // 10 per 5min
+    "beta-access": { max: 5, windowSec: 15 * 60 }, // 5 attempts per 15min (anti-brute-force)
   };
 
   const config = configs[endpoint] || { max: 60, windowSec: 60 }; // Default: 60/min

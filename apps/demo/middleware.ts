@@ -1,12 +1,54 @@
 import { auth } from "@/auth";
 import { NextResponse } from "next/server";
+import {
+  BETA_ACCESS_COOKIE_NAME,
+  isBetaGateEnabled,
+  verifyBetaCookie,
+} from "@/src/lib/beta-access";
 
-export default auth((req) => {
+export default auth(async (req) => {
   const { pathname, searchParams } = req.nextUrl;
   const session = req.auth;
 
   // ============================================
-  // MAINTENANCE MODE CHECK (highest priority)
+  // BETA ACCESS GATE (highest priority — runs before maintenance)
+  // ============================================
+  //
+  // Defense-in-depth: even before auth, require the beta password.
+  // - HMAC-signed cookie verified server-side
+  // - Static assets, /access, and /api/access exempt to avoid loops
+  // - Optional bypass via BETA_ACCESS_DISABLED env var (dev only)
+  if (isBetaGateEnabled()) {
+    const betaExemptPaths = [
+      "/access",
+      "/api/access",
+      "/_next",
+      "/favicon.ico",
+      "/icon.png",
+      "/apple-icon.png",
+      "/images",
+      "/backgrounds",
+    ];
+    const isBetaExempt = betaExemptPaths.some((path) =>
+      pathname.startsWith(path),
+    );
+
+    if (!isBetaExempt) {
+      const betaCookie = req.cookies.get(BETA_ACCESS_COOKIE_NAME)?.value;
+      const cookieValid = await verifyBetaCookie(betaCookie);
+      if (!cookieValid) {
+        const accessUrl = new URL("/access", req.url);
+        // Preserve original destination so we can redirect back after gate
+        if (pathname !== "/") {
+          accessUrl.searchParams.set("redirect", pathname + req.nextUrl.search);
+        }
+        return NextResponse.redirect(accessUrl);
+      }
+    }
+  }
+
+  // ============================================
+  // MAINTENANCE MODE CHECK
   // ============================================
   const isMaintenanceMode = process.env.MAINTENANCE_MODE === "true";
 

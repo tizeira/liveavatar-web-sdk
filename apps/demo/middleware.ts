@@ -83,8 +83,12 @@ export default auth(async (req) => {
   // AUTH CHECK (existing logic)
   // ============================================
 
-  // Allow public pages (login, maintenance, auth)
+  // Allow public pages (access, login, maintenance, auth)
+  // CRITICAL: /access must be auth-public, otherwise:
+  //   /access → no session → redirects /login → no beta cookie → redirects /access → LOOP
   if (
+    pathname.startsWith("/access") ||
+    pathname.startsWith("/api/access") ||
     pathname.startsWith("/login") ||
     pathname.startsWith("/api/auth") ||
     pathname.startsWith("/maintenance")

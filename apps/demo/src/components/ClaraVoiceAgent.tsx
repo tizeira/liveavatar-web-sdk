@@ -503,7 +503,9 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
   // REQUIRES: ElevenLabs agent dashboard → "First message" must be EMPTY.
   const hasStartedVoiceChatRef = useRef(false);
 
-  // Step 1: On streamReady, verify voiceChat is active + unmuted (NO commands sent yet)
+  // Step 1: On streamReady, ensure mic stays MUTED during greeting.
+  // The mic is unmuted in Step 3 (after AVATAR_SPEAK_ENDED) so the agent
+  // can't be interrupted by ambient noise or echo during its opening line.
   useEffect(() => {
     const session = sessionRef.current;
     if (!isStreamReady || !session) return;
@@ -519,43 +521,24 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
         `[PLUGIN] voiceChat state="${vcState}", isMuted=${vcMuted}`,
       );
 
-      if (vcState === "ACTIVE") {
-        console.log("[PLUGIN] VoiceChat already ACTIVE (SDK auto-started) ✓");
-        if (vcMuted) {
-          console.log("[PLUGIN] Mic is muted, unmuting...");
-          sendServerLog("[PLUGIN] Mic was MUTED — unmuting now");
-          session.voiceChat
-            .unmute()
-            .then(() => {
-              console.log("[PLUGIN] Mic unmuted ✓");
-              sendServerLog("[PLUGIN] Mic unmuted successfully ✓");
-            })
-            .catch((err: unknown) => {
-              console.error("[PLUGIN] Failed to unmute:", err);
-              sendServerLog(`[PLUGIN] Failed to unmute: ${err}`, "error");
-            });
-        } else {
-          console.log("[PLUGIN] Mic is already unmuted ✓");
-          sendServerLog("[PLUGIN] Mic already unmuted ✓");
-        }
-      } else {
-        console.log("[PLUGIN] VoiceChat not active, starting...");
-        sendServerLog(
-          `[PLUGIN] VoiceChat not active (${vcState}), starting manually`,
-        );
+      // Force-mute during greeting so ambient sound can't trigger an interrupt
+      if (vcState === "ACTIVE" && !vcMuted) {
+        console.log("[PLUGIN] Muting mic for greeting (avoid interruption)");
         session.voiceChat
-          .start({ defaultMuted: false })
-          .then(() => {
-            console.log(
-              `[PLUGIN] voiceChat.start() done, state="${session.voiceChat.state}"`,
-            );
-            sendServerLog(
-              `[PLUGIN] voiceChat.start() done, state="${session.voiceChat.state}"`,
-            );
-          })
+          .mute()
+          .then(() => sendServerLog("[PLUGIN] Mic MUTED for greeting"))
+          .catch((err: unknown) => {
+            console.error("[PLUGIN] Mute failed:", err);
+          });
+      } else if (vcState !== "ACTIVE") {
+        console.log("[PLUGIN] VoiceChat not active, starting muted...");
+        session.voiceChat
+          .start({ defaultMuted: true })
+          .then(() =>
+            sendServerLog("[PLUGIN] voiceChat started (muted for greeting)"),
+          )
           .catch((err: unknown) => {
             console.error("[PLUGIN] voiceChat.start() failed:", err);
-            sendServerLog(`[PLUGIN] voiceChat.start() FAILED: ${err}`, "error");
             hasStartedVoiceChatRef.current = false;
           });
       }
@@ -563,48 +546,66 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isStreamReady]);
 
-  // Step 2: After streamReady, wait for WebRTC jitter buffer warm-up,
-  // then send contextual_update that triggers the greeting.
+  // Step 2: As soon as streamReady, trigger the greeting immediately.
+  // The natural LLM + TTS latency of ElevenLabs (~1-2s) is enough to let the
+  // WebRTC jitter buffer warm up — no artificial delay needed.
   //
   // REQUIRES: ElevenLabs agent dashboard → "First message" must be EMPTY.
-  // The client now controls when the greeting starts so it can't be cut off
-  // by WebRTC audio decoder warming up.
   useEffect(() => {
     const session = sessionRef.current;
     if (!isStreamReady || !session) return;
     if (hasSentContextRef.current) return;
+    hasSentContextRef.current = true;
 
-    // 1.5s delay = WebRTC audio jitter buffer typically warms up in 200-500ms,
-    // adding margin so the first word of the greeting plays cleanly.
-    const timer = setTimeout(() => {
-      if (hasSentContextRef.current) return;
-      hasSentContextRef.current = true;
+    const firstName = customerData?.firstName;
+    console.log(
+      `[PLUGIN] Triggering personalized greeting (firstName=${firstName || "none"})`,
+    );
+    sendServerLog(
+      `[PLUGIN] Triggering greeting for ${firstName || "anonymous user"}`,
+    );
 
-      const firstName = customerData?.firstName;
-      console.log(
-        `[PLUGIN] Triggering personalized greeting (firstName=${firstName || "none"})`,
-      );
-      sendServerLog(
-        `[PLUGIN] Triggering greeting for ${firstName || "anonymous user"}`,
-      );
-
-      sendCustomerContext(
-        session,
-        {
-          firstName: customerData?.firstName,
-          lastName: customerData?.lastName,
-          email: customerData?.email,
-          skinType: customerData?.skinType,
-          skinConcerns: customerData?.skinConcerns,
-          ordersCount: customerData?.ordersCount,
-        },
-        { triggerGreeting: true },
-      );
-    }, 1500);
-
-    return () => clearTimeout(timer);
+    sendCustomerContext(
+      session,
+      {
+        firstName: customerData?.firstName,
+        lastName: customerData?.lastName,
+        email: customerData?.email,
+        skinType: customerData?.skinType,
+        skinConcerns: customerData?.skinConcerns,
+        ordersCount: customerData?.ordersCount,
+      },
+      { triggerGreeting: true },
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isStreamReady, customerData]);
+
+  // Step 3: After the greeting finishes (first AVATAR_SPEAK_ENDED), unmute
+  // the mic so the user can respond. This prevents ambient noise from
+  // interrupting the greeting mid-sentence.
+  const hasUnmutedAfterGreetingRef = useRef(false);
+  useEffect(() => {
+    const session = sessionRef.current;
+    if (!session) return;
+
+    const onGreetingFinished = () => {
+      if (hasUnmutedAfterGreetingRef.current) return;
+      hasUnmutedAfterGreetingRef.current = true;
+      console.log("[PLUGIN] Greeting ended — unmuting mic for user input");
+      sendServerLog("[PLUGIN] Greeting done, unmuting mic");
+      session.voiceChat.unmute().catch((err: unknown) => {
+        console.error("[PLUGIN] Unmute after greeting failed:", err);
+        sendServerLog(`[PLUGIN] Unmute failed: ${err}`, "error");
+      });
+      session.off(AgentEventsEnum.AVATAR_SPEAK_ENDED, onGreetingFinished);
+    };
+
+    session.on(AgentEventsEnum.AVATAR_SPEAK_ENDED, onGreetingFinished);
+    return () => {
+      session.off(AgentEventsEnum.AVATAR_SPEAK_ENDED, onGreetingFinished);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // === DIAGNOSTIC: Periodic mic state monitoring ===
   useEffect(() => {

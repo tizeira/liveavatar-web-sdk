@@ -546,9 +546,16 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isStreamReady]);
 
-  // Step 2: As soon as streamReady, trigger the greeting immediately.
-  // The natural LLM + TTS latency of ElevenLabs (~1-2s) is enough to let the
-  // WebRTC jitter buffer warm up — no artificial delay needed.
+  // Step 2: After streamReady, do a 2-step handshake with the ElevenLabs agent:
+  //
+  //   2a. contextual_update → inject customer info as silent context (no response)
+  //   2b. sendUserMessage("Hola") → trigger the agent's first response
+  //
+  // Why two steps: contextual_update is purely silent (stores info, doesn't
+  // trigger a response). sendUserMessage simulates a user message which DOES
+  // trigger a response — that response will use the context from step 2a.
+  // The 150ms delay between them ensures the agent processes the context
+  // BEFORE the trigger message, so the response is personalized.
   //
   // REQUIRES: ElevenLabs agent dashboard → "First message" must be EMPTY.
   useEffect(() => {
@@ -559,24 +566,36 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
 
     const firstName = customerData?.firstName;
     console.log(
-      `[PLUGIN] Triggering personalized greeting (firstName=${firstName || "none"})`,
+      `[PLUGIN] Sending context + greeting trigger (firstName=${firstName || "none"})`,
     );
     sendServerLog(
-      `[PLUGIN] Triggering greeting for ${firstName || "anonymous user"}`,
+      `[PLUGIN] Init greeting for ${firstName || "anonymous user"}`,
     );
 
-    sendCustomerContext(
-      session,
-      {
-        firstName: customerData?.firstName,
-        lastName: customerData?.lastName,
-        email: customerData?.email,
-        skinType: customerData?.skinType,
-        skinConcerns: customerData?.skinConcerns,
-        ordersCount: customerData?.ordersCount,
-      },
-      { triggerGreeting: true },
-    );
+    // 2a. Silent customer info — no response triggered
+    sendCustomerContext(session, {
+      firstName: customerData?.firstName,
+      lastName: customerData?.lastName,
+      email: customerData?.email,
+      skinType: customerData?.skinType,
+      skinConcerns: customerData?.skinConcerns,
+      ordersCount: customerData?.ordersCount,
+    });
+
+    // 2b. Trigger response 150ms later (gives agent time to ingest context).
+    // "Hola" simulates a user message — invisible in our UI but visible in EL logs.
+    const triggerTimer = setTimeout(() => {
+      try {
+        console.log("[PLUGIN] Sending trigger user_message to start greeting");
+        sendServerLog("[PLUGIN] Sending greeting trigger");
+        session.sendUserMessage("Hola");
+      } catch (err) {
+        console.error("[PLUGIN] sendUserMessage trigger failed:", err);
+        sendServerLog(`[PLUGIN] Trigger failed: ${err}`, "error");
+      }
+    }, 150);
+
+    return () => clearTimeout(triggerTimer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isStreamReady, customerData]);
 

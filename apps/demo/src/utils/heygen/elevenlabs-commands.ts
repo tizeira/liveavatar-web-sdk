@@ -12,14 +12,11 @@ import type { ElevenLabsAgentSession } from "@heygen/liveavatar-web-sdk";
 /**
  * Send customer context to ElevenLabs agent via contextual_update.
  *
- * This replaces `dynamic_variables` (which are blocked by the plugin).
- * contextual_update is MORE flexible: free-form text, updatable mid-conversation,
- * and doesn't require template placeholders in the agent prompt.
+ * This is PURELY a silent context injection — it does NOT trigger a response.
+ * The agent stores the info and uses it on the next response it generates.
+ * To make the agent speak, call session.sendUserMessage(...) separately.
  *
- * If `triggerGreeting=true`, includes an explicit instruction asking the
- * agent to greet the user NOW. Use this when the agent's "first_message"
- * is disabled in the dashboard and you want the client to control when
- * the greeting actually starts (e.g. after WebRTC jitter buffer warmup).
+ * Replaces `dynamic_variables` (which are blocked by the plugin).
  */
 export function sendCustomerContext(
   session: ElevenLabsAgentSession,
@@ -31,7 +28,6 @@ export function sendCustomerContext(
     skinConcerns?: string[];
     ordersCount?: number;
   },
-  options: { triggerGreeting?: boolean } = {},
 ): void {
   const parts: string[] = [];
 
@@ -57,28 +53,13 @@ export function sendCustomerContext(
     );
   }
 
-  if (options.triggerGreeting) {
-    // Explicit instruction so the agent generates an opening response NOW
-    // instead of waiting for the user to speak first.
-    const nameRef = context.firstName
-      ? ` por su nombre (${context.firstName})`
-      : "";
-    parts.push(
-      `La cliente acaba de iniciar la sesión y aún no ha hablado. ` +
-        `Salúdala ahora cálidamente${nameRef} en una sola frase corta, ` +
-        `y preguntale en qué la podés ayudar hoy.`,
-    );
-  }
-
   if (parts.length === 0) {
     console.log("[EL-CMD] No customer context to send, skipping");
     return;
   }
 
   const text = parts.join(" ");
-  console.log(
-    `[EL-CMD] Sending contextual_update (${text.length} chars, triggerGreeting=${!!options.triggerGreeting})`,
-  );
+  console.log(`[EL-CMD] Sending contextual_update (${text.length} chars)`);
 
   try {
     session.sendContextualUpdate(text);

@@ -230,7 +230,7 @@ export default function Home() {
           mockParams.set("last_order_date", mockCustomer.last_order_date);
         }
         if (mockCustomer.last_product) {
-          mockParams.set("last_product", mockCustomer.last_product);
+          mockParams.set("last_order_product", mockCustomer.last_product);
         }
         if (mockCustomer.skin_type) {
           mockParams.set("skin_type", mockCustomer.skin_type);

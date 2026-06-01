@@ -30,6 +30,10 @@ describe("formatRelativeDate", () => {
   it("returns '' for an invalid date string", () => {
     expect(formatRelativeDate("not-a-date")).toBe("");
   });
+
+  it("returns '' for a future date", () => {
+    expect(formatRelativeDate("2026-06-05T12:00:00Z")).toBe("");
+  });
 });
 
 import { sendCustomerContext } from "@/src/utils/heygen/elevenlabs-commands";

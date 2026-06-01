@@ -25,7 +25,8 @@ export function formatRelativeDate(iso?: string): string {
     Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
   const diffDays = Math.round((startOf(now) - startOf(then)) / msPerDay);
 
-  if (diffDays <= 0) return "hoy";
+  if (diffDays < 0) return ""; // future date = invalid order data
+  if (diffDays === 0) return "hoy";
   if (diffDays === 1) return "ayer";
   return `hace ${diffDays} días`;
 }

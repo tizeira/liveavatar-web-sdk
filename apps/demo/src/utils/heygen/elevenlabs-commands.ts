@@ -48,6 +48,8 @@ export function sendCustomerContext(
     skinType?: string;
     skinConcerns?: string[];
     ordersCount?: number;
+    lastOrderProduct?: string;
+    lastOrderDate?: string;
   },
 ): void {
   const parts: string[] = [];
@@ -71,6 +73,13 @@ export function sendCustomerContext(
   if (context.ordersCount !== undefined && context.ordersCount > 0) {
     parts.push(
       `Ha realizado ${context.ordersCount} compra${context.ordersCount > 1 ? "s" : ""} anteriormente. Es cliente recurrente.`,
+    );
+  }
+
+  if (context.lastOrderProduct) {
+    const whenStr = formatRelativeDate(context.lastOrderDate);
+    parts.push(
+      `Su compra más reciente fue: ${context.lastOrderProduct}${whenStr ? ` (${whenStr})` : ""}.`,
     );
   }
 

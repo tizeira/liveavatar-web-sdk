@@ -91,6 +91,8 @@ export interface ShopifyCustomerRequest {
   last_name?: string;
   email?: string;
   orders_count?: string;
+  last_order_product?: string;
+  last_order_date?: string;
 }
 
 export interface VerifyCustomerRequest {
@@ -109,6 +111,8 @@ export interface ShopifyCustomerResponse {
     skinType?: string;
     skinConcerns?: string[];
     recentOrders?: ShopifyOrder[];
+    lastOrderProduct?: string;
+    lastOrderDate?: string;
   } | null;
   error?: string;
 }

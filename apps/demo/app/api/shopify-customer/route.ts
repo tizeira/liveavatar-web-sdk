@@ -78,6 +78,8 @@ export async function POST(request: NextRequest) {
       last_name,
       email,
       orders_count,
+      last_order_product,
+      last_order_date,
     } = body;
 
     // === DATABASE CACHE CHECK ===
@@ -98,6 +100,8 @@ export async function POST(request: NextRequest) {
               ordersCount: cached.ordersCount || 0,
               skinType: cached.skinType,
               skinConcerns: cached.skinConcerns,
+              lastOrderProduct: last_order_product,
+              lastOrderDate: last_order_date,
             },
           });
         }
@@ -192,6 +196,8 @@ export async function POST(request: NextRequest) {
         firstName: first_name || null,
         lastName: last_name || null,
         ordersCount: ordersCountNum,
+        lastOrderProduct: last_order_product,
+        lastOrderDate: last_order_date,
         // Note: skinType and skinConcerns require metafields in Liquid template
         // Can be added to the iframe URL later if needed
       },

@@ -10,6 +10,28 @@
 import type { ElevenLabsAgentSession } from "@heygen/liveavatar-web-sdk";
 
 /**
+ * Convert an ISO date to Spanish relative text for the greeting.
+ * "hoy" | "ayer" | "hace N días" | "" (if missing/invalid).
+ */
+export function formatRelativeDate(iso?: string): string {
+  if (!iso) return "";
+  const then = new Date(iso);
+  if (Number.isNaN(then.getTime())) return "";
+
+  const now = new Date();
+  // Compare calendar days in UTC to avoid TZ drift
+  const msPerDay = 24 * 60 * 60 * 1000;
+  const startOf = (d: Date) =>
+    Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  const diffDays = Math.round((startOf(now) - startOf(then)) / msPerDay);
+
+  if (diffDays < 0) return ""; // future date = invalid order data
+  if (diffDays === 0) return "hoy";
+  if (diffDays === 1) return "ayer";
+  return `hace ${diffDays} días`;
+}
+
+/**
  * Send customer context to ElevenLabs agent via contextual_update.
  *
  * This is PURELY a silent context injection — it does NOT trigger a response.
@@ -27,6 +49,8 @@ export function sendCustomerContext(
     skinType?: string;
     skinConcerns?: string[];
     ordersCount?: number;
+    lastOrderProduct?: string;
+    lastOrderDate?: string;
   },
 ): void {
   const parts: string[] = [];
@@ -50,6 +74,13 @@ export function sendCustomerContext(
   if (context.ordersCount !== undefined && context.ordersCount > 0) {
     parts.push(
       `Ha realizado ${context.ordersCount} compra${context.ordersCount > 1 ? "s" : ""} anteriormente. Es cliente recurrente.`,
+    );
+  }
+
+  if (context.lastOrderProduct) {
+    const whenStr = formatRelativeDate(context.lastOrderDate);
+    parts.push(
+      `Su compra más reciente fue: ${context.lastOrderProduct}${whenStr ? ` (${whenStr})` : ""}.`,
     );
   }
 

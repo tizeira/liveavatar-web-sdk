@@ -580,6 +580,8 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
       skinType: customerData?.skinType,
       skinConcerns: customerData?.skinConcerns,
       ordersCount: customerData?.ordersCount,
+      lastOrderProduct: customerData?.lastOrderProduct,
+      lastOrderDate: customerData?.lastOrderDate,
     });
 
     // 2b. Trigger response 150ms later (gives agent time to ingest context).
@@ -588,7 +590,7 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
       try {
         console.log("[PLUGIN] Sending trigger user_message to start greeting");
         sendServerLog("[PLUGIN] Sending greeting trigger");
-        session.sendUserMessage("Hola");
+        session.sendUserMessage("[START]");
       } catch (err) {
         console.error("[PLUGIN] sendUserMessage trigger failed:", err);
         sendServerLog(`[PLUGIN] Trigger failed: ${err}`, "error");

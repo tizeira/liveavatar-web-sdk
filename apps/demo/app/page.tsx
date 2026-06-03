@@ -50,6 +50,8 @@ export default function Home() {
           last_name: params.get("last_name"),
           email: params.get("email"),
           orders_count: params.get("orders_count"),
+          last_order_product: params.get("last_order_product"),
+          last_order_date: params.get("last_order_date"),
         }),
       });
 
@@ -97,6 +99,8 @@ export default function Home() {
           ordersCount: data.customer.ordersCount,
           skinType: data.customer.skinType as CustomerData["skinType"],
           skinConcerns: data.customer.skinConcerns,
+          lastOrderProduct: data.customer.lastOrderProduct,
+          lastOrderDate: data.customer.lastOrderDate,
         };
         setCustomerData(customer);
 
@@ -226,7 +230,7 @@ export default function Home() {
           mockParams.set("last_order_date", mockCustomer.last_order_date);
         }
         if (mockCustomer.last_product) {
-          mockParams.set("last_product", mockCustomer.last_product);
+          mockParams.set("last_order_product", mockCustomer.last_product);
         }
         if (mockCustomer.skin_type) {
           mockParams.set("skin_type", mockCustomer.skin_type);

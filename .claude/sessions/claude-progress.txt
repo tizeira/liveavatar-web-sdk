@@ -116,3 +116,36 @@ Created `.claude/` structure:
 1. **Micro-pausa entre chunks**: ~150-300ms gap when Smart Chunking activates
 2. **Mobile latency**: May be higher on slow networks
 3. **Safari iOS**: Not supported (SafariFallbackScreen shows message)
+
+
+## 2026-06-04: Limpieza de PRs + actualizacion de contexto
+
+### Hecho
+- Mergeados (por el usuario) PR #18 (Prisma 7->6) y PR #19 (Shopify purchase-greeting).
+- Descartado cambio half-duplex sin commitear (mata el barge-in -> rechazado).
+- Borradas 9 ramas locales mergeadas. Quedan: develop, master, y 5 con trabajo sin mergear
+  (docs/pr-workflow-protection #12, claude/integrate-openai #4, hotfix/security-hardening-apr-2026,
+  claude/streaming-api-fix, fix/audio-first-words, feature/elevenlabs-plugin).
+- Reescrito CLAUDE.md (arquitectura plugin ElevenLabs, fixes, mejores practicas, uso de skills).
+- Reescritos feature_list.json y blockers.json con estado real verificado.
+- Creado docs/QA_CHECKLIST.md.
+
+### Estado verificado
+- pnpm typecheck: PASS. pnpm test: 55/55 PASS. Working tree limpio en develop.
+- develop esta ~47 commits delante de master. PR #14 = promocion a prod (pendiente QA).
+
+### PRs abiertos
+- #14 develop->master (promocion a prod; testear preview primero).
+- #12 docs/husky (STALE 56 commits; rebase o cherry-pick .husky/* y cerrar).
+- #4 OpenAI voice (draft, conflicting; candidato a cerrar).
+
+### Brainstorm pausado
+- Telemetria de sesiones (logs+dispositivo por usuario, digerible por IA) + base circuit-breaker.
+  Decidido: flujo A (revision por sesion) + senales tecnicas duras para auto-apagado.
+  Falta: elegir backend de storage + diseno PII.
+
+### Proximos pasos
+1. QA en preview (docs/QA_CHECKLIST.md), incluyendo verificar escritura en DB.
+2. Terminar diseno de telemetria y construirla (clave para el bug 'habla sola').
+3. Mergear PR #14 a prod cuando QA de verde.
+4. Cerrar/rebasar PR #12 y #4.

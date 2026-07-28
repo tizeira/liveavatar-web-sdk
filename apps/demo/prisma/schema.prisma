@@ -5,7 +5,17 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("POSTGRES_PRISMA_URL")
+
+  // url: conexion POOLED (PgBouncer de Neon, host con sufijo -pooler).
+  // Es la que usa la app en runtime: aguanta miles de conexiones de cliente,
+  // que es lo que necesita un entorno serverless donde cada lambda abre su pool.
+  url = env("POSTGRES_PRISMA_URL")
+
+  // directUrl: conexion DIRECTA (mismo host sin -pooler).
+  // La usa el CLI de Prisma para migraciones, introspeccion y DDL. PgBouncer en
+  // transaction mode no soporta migraciones de esquema ni advisory locks, asi que
+  // sin esto `prisma migrate` falla o se comporta de forma impredecible.
+  directUrl = env("POSTGRES_URL_NON_POOLING")
 }
 
 // ============================================
@@ -125,7 +135,9 @@ model ShopifyCustomerCache {
   cachedAt  DateTime @default(now())
   expiresAt DateTime // TTL for cache invalidation
 
-  @@index([shopifyId])
+  // Nota: shopifyId ya es @unique, y Postgres crea un indice unico por cada
+  // constraint unique. Un @@index([shopifyId]) seria un segundo indice sobre la
+  // misma columna: ocupa espacio y encarece cada escritura sin acelerar lecturas.
   @@index([expiresAt])
   @@map("shopify_customer_cache")
 }
@@ -175,6 +187,7 @@ model DailyMetrics {
   totalConversations Int @default(0)
   totalProductMentions Int @default(0)
 
-  @@index([date])
+  // Nota: date ya es @unique @db.Date, que crea su propio indice. No hace falta
+  // un @@index([date]) adicional.
   @@map("daily_metrics")
 }

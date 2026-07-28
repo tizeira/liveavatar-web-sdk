@@ -18,6 +18,7 @@
 ## Task 1: Add last-order fields to type definitions
 
 **Files:**
+
 - Modify: `apps/demo/src/liveavatar/types.ts` (CustomerData interface)
 - Modify: `apps/demo/src/shopify/types.ts` (ShopifyCustomerRequest + ShopifyCustomerResponse)
 
@@ -68,6 +69,7 @@ git commit -m "feat: add lastOrderProduct/lastOrderDate to customer types"
 A pure function that turns an ISO date into Spanish relative text. Lives in the same file that will use it.
 
 **Files:**
+
 - Modify: `apps/demo/src/utils/heygen/elevenlabs-commands.ts` (add exported helper)
 - Create: `apps/demo/src/__tests__/utils/elevenlabs-commands.test.ts`
 
@@ -162,6 +164,7 @@ git commit -m "feat: add formatRelativeDate helper with tests"
 Extend the context builder to mention the last purchase. The function currently takes `(session, context)` and calls `session.sendContextualUpdate(text)`.
 
 **Files:**
+
 - Modify: `apps/demo/src/utils/heygen/elevenlabs-commands.ts` (`sendCustomerContext` signature + body)
 - Modify: `apps/demo/src/__tests__/utils/elevenlabs-commands.test.ts` (add describe block)
 
@@ -251,12 +254,12 @@ export function sendCustomerContext(
 Inside the body, AFTER the existing `ordersCount` block and BEFORE the `if (parts.length === 0)` check, add:
 
 ```typescript
-  if (context.lastOrderProduct) {
-    const whenStr = formatRelativeDate(context.lastOrderDate);
-    parts.push(
-      `Su compra más reciente fue: ${context.lastOrderProduct}${whenStr ? ` (${whenStr})` : ""}.`,
-    );
-  }
+if (context.lastOrderProduct) {
+  const whenStr = formatRelativeDate(context.lastOrderDate);
+  parts.push(
+    `Su compra más reciente fue: ${context.lastOrderProduct}${whenStr ? ` (${whenStr})` : ""}.`,
+  );
+}
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -276,6 +279,7 @@ git commit -m "feat: include recent purchase in contextual_update"
 ## Task 4: Extend `/api/shopify-customer` to pass through last-order fields
 
 **Files:**
+
 - Modify: `apps/demo/app/api/shopify-customer/route.ts`
 
 - [ ] **Step 1: Destructure new fields from the body**
@@ -283,16 +287,16 @@ git commit -m "feat: include recent purchase in contextual_update"
 In the body-parse block (currently destructuring `customer_id, shopify_token, first_name, last_name, email, orders_count`), add the two new fields:
 
 ```typescript
-    const {
-      customer_id,
-      shopify_token,
-      first_name,
-      last_name,
-      email,
-      orders_count,
-      last_order_product,
-      last_order_date,
-    } = body;
+const {
+  customer_id,
+  shopify_token,
+  first_name,
+  last_name,
+  email,
+  orders_count,
+  last_order_product,
+  last_order_date,
+} = body;
 ```
 
 - [ ] **Step 2: Include fields in the CACHE HIT response**
@@ -346,6 +350,7 @@ git commit -m "feat: pass last-order fields through shopify-customer endpoint"
 ## Task 5: Wire `page.tsx` to read + forward last-order params
 
 **Files:**
+
 - Modify: `apps/demo/app/page.tsx` (`verifyShopifyCustomer`)
 
 - [ ] **Step 1: Forward params in the POST body**
@@ -370,16 +375,16 @@ In `verifyShopifyCustomer`, in the `fetch("/api/shopify-customer", ...)` body, a
 In the same function, in the `if (data.customer)` success branch where `setCustomerData({...})` is called with the full customer object, add the two fields:
 
 ```typescript
-        const customer = {
-          firstName: data.customer.firstName || undefined,
-          lastName: data.customer.lastName || undefined,
-          email: data.customer.email || undefined,
-          ordersCount: data.customer.ordersCount,
-          skinType: data.customer.skinType as CustomerData["skinType"],
-          skinConcerns: data.customer.skinConcerns,
-          lastOrderProduct: data.customer.lastOrderProduct,
-          lastOrderDate: data.customer.lastOrderDate,
-        };
+const customer = {
+  firstName: data.customer.firstName || undefined,
+  lastName: data.customer.lastName || undefined,
+  email: data.customer.email || undefined,
+  ordersCount: data.customer.ordersCount,
+  skinType: data.customer.skinType as CustomerData["skinType"],
+  skinConcerns: data.customer.skinConcerns,
+  lastOrderProduct: data.customer.lastOrderProduct,
+  lastOrderDate: data.customer.lastOrderDate,
+};
 ```
 
 > Note: `data.customer.lastOrderProduct/Date` exist on `ShopifyCustomerResponse` from Task 1. If TS complains the response type for this fetch is `ShopifyCustomerResponse`, it already includes them.
@@ -401,6 +406,7 @@ git commit -m "feat: read and forward last-order params in page.tsx"
 ## Task 6: `[START]` trigger + pass last-order fields in ClaraVoiceAgent
 
 **Files:**
+
 - Modify: `apps/demo/src/components/ClaraVoiceAgent.tsx` (Step 2 greeting handshake)
 
 > Context: the greeting handshake (Step 2) already exists. It calls `sendCustomerContext(session, {...})` then `session.sendUserMessage("Hola")` (or `"[START]"` if PR #17 already switched it). This task ensures the trigger is `"[START]"` and the last-order fields are passed.
@@ -410,16 +416,16 @@ git commit -m "feat: read and forward last-order params in page.tsx"
 In `ClaraVoiceAgent.tsx`, find the Step 2 `useEffect` that calls `sendCustomerContext(session, {...})`. Add the two fields to the object:
 
 ```typescript
-    sendCustomerContext(session, {
-      firstName: customerData?.firstName,
-      lastName: customerData?.lastName,
-      email: customerData?.email,
-      skinType: customerData?.skinType,
-      skinConcerns: customerData?.skinConcerns,
-      ordersCount: customerData?.ordersCount,
-      lastOrderProduct: customerData?.lastOrderProduct,
-      lastOrderDate: customerData?.lastOrderDate,
-    });
+sendCustomerContext(session, {
+  firstName: customerData?.firstName,
+  lastName: customerData?.lastName,
+  email: customerData?.email,
+  skinType: customerData?.skinType,
+  skinConcerns: customerData?.skinConcerns,
+  ordersCount: customerData?.ordersCount,
+  lastOrderProduct: customerData?.lastOrderProduct,
+  lastOrderDate: customerData?.lastOrderDate,
+});
 ```
 
 - [ ] **Step 2: Ensure the trigger is `[START]`**
@@ -427,7 +433,7 @@ In `ClaraVoiceAgent.tsx`, find the Step 2 `useEffect` that calls `sendCustomerCo
 In the same `useEffect`, find the trigger call. If it reads `session.sendUserMessage("Hola")`, change it to:
 
 ```typescript
-        session.sendUserMessage("[START]");
+session.sendUserMessage("[START]");
 ```
 
 If it already reads `"[START]"`, leave it unchanged.
@@ -451,6 +457,7 @@ git commit -m "feat: pass last-order context + use [START] greeting trigger"
 These two changes are applied OUTSIDE the codebase (Shopify dashboard + ElevenLabs dashboard). This task produces a single doc file with the exact snippets so the user can copy-paste.
 
 **Files:**
+
 - Create: `apps/demo/shopify-templates/REDIRECT_MIGRATION.md`
 
 - [ ] **Step 1: Write the migration doc**
@@ -465,24 +472,27 @@ Aplicar estos dos cambios manualmente (no son código del repo).
 ## 1. Shopify theme — `page.clara.liquid`
 
 ### 1a. Agregar params de última compra
+
 Dentro del bloque `if customer and hmac_secret != blank`, después de los
 `if orders_count` existentes, agregar:
 
 \`\`\`liquid
 {%- if customer.last_order != blank -%}
-  {%- assign last_order = customer.last_order -%}
-  {%- assign last_item = last_order.line_items.first -%}
-  {%- if last_item != blank -%}
-    {%- assign widget_url = widget_url | append: '&last_order_product=' | append: last_item.title | url_encode -%}
-  {%- endif -%}
-  {%- assign widget_url = widget_url | append: '&last_order_date=' | append: last_order.created_at | url_encode -%}
+{%- assign last_order = customer.last_order -%}
+{%- assign last_item = last_order.line_items.first -%}
+{%- if last_item != blank -%}
+{%- assign widget_url = widget_url | append: '&last_order_product=' | append: last_item.title | url_encode -%}
+{%- endif -%}
+{%- assign widget_url = widget_url | append: '&last_order_date=' | append: last_order.created_at | url_encode -%}
 {%- endif -%}
 \`\`\`
 
 ### 1b. Reemplazar el iframe por un redirect
+
 Reemplazar el bloque `<iframe ...></iframe>` por:
 
 \`\`\`liquid
+
 <script>
   window.location.replace({{ widget_url | json }});
 </script>
@@ -534,6 +544,7 @@ Expected: no errors.
 - [ ] **Step 4: Manual e2e checklist (preview deploy)**
 
 After pushing the branch and Vercel builds a preview:
+
 1. Apply the Liquid changes (Task 7) in a test theme + the agent prompt.
 2. Log into the Shopify store as a customer with ≥1 order → click "Hablá con Clara".
 3. Confirm full-page redirect (no iframe) to the preview URL with `last_order_product` in the URL.

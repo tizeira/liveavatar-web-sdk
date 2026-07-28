@@ -152,10 +152,16 @@ export async function incrementMessageCount(sessionId: string) {
 
 /**
  * Get cached Shopify customer data
+ *
+ * Se indexa por shopifyId, no por email: el id es el unico campo firmado por
+ * HMAC. Ver el comentario del modelo ShopifyCustomerCache en schema.prisma.
+ *
+ * IMPORTANTE: solo llamar despues de haber verificado el token HMAC. La cache
+ * contiene PII y no es un mecanismo de autenticacion.
  */
-export async function getCachedCustomer(shopifyEmail: string) {
+export async function getCachedCustomer(shopifyId: string) {
   const cached = await prisma.shopifyCustomerCache.findUnique({
-    where: { shopifyEmail },
+    where: { shopifyId },
   });
 
   // Check if cache is expired
@@ -171,8 +177,8 @@ export async function getCachedCustomer(shopifyEmail: string) {
  * Cache Shopify customer data (TTL: 24 hours)
  */
 export async function cacheCustomer(data: {
-  shopifyEmail: string;
-  shopifyId?: string;
+  shopifyId: string;
+  shopifyEmail?: string;
   firstName?: string;
   lastName?: string;
   skinType?: string;
@@ -183,7 +189,7 @@ export async function cacheCustomer(data: {
   expiresAt.setHours(expiresAt.getHours() + 24); // 24 hour TTL
 
   return await prisma.shopifyCustomerCache.upsert({
-    where: { shopifyEmail: data.shopifyEmail },
+    where: { shopifyId: data.shopifyId },
     update: {
       ...data,
       cachedAt: new Date(),
@@ -198,10 +204,12 @@ export async function cacheCustomer(data: {
 
 /**
  * Invalidate customer cache (force refresh)
+ *
+ * Usado por el webhook customers/redact de Shopify (pendiente, ver plan).
  */
-export async function invalidateCustomerCache(shopifyEmail: string) {
+export async function invalidateCustomerCache(shopifyId: string) {
   return await prisma.shopifyCustomerCache.delete({
-    where: { shopifyEmail },
+    where: { shopifyId },
   });
 }
 

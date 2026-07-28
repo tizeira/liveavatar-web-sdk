@@ -38,7 +38,12 @@ export async function rateLimit(
 
   // Guard: si KV no está configurado, fail-open (no bloquear)
   if (!process.env.KV_REST_API_URL && !process.env.KV_URL) {
-    return { success: true, limit: max, remaining: max, reset: Date.now() + windowSec * 1000 };
+    return {
+      success: true,
+      limit: max,
+      remaining: max,
+      reset: Date.now() + windowSec * 1000,
+    };
   }
   const now = Date.now();
   const key = `ratelimit:${identifier}`;
@@ -146,6 +151,11 @@ export async function rateLimitByEndpoint(
     return await rateLimit(identifier, config);
   } catch {
     // KV connection error - fail-open to not block the request
-    return { success: true, limit: config.max, remaining: config.max, reset: Date.now() + config.windowSec * 1000 };
+    return {
+      success: true,
+      limit: config.max,
+      remaining: config.max,
+      reset: Date.now() + config.windowSec * 1000,
+    };
   }
 }

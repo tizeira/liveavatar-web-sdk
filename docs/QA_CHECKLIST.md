@@ -95,4 +95,4 @@
 ## Veredicto
 
 - [ ] **Todo verde → OK para mergear PR #14 (develop → master)**
-- Responsable QA: ****\_\_**** · Fecha: ****\_\_**** · Commit develop: ****\_\_****
+- Responsable QA: \***\*\_\_\*\*** · Fecha: \***\*\_\_\*\*** · Commit develop: \***\*\_\_\*\***

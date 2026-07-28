@@ -20,14 +20,14 @@ El escenario objetivo es **"recién compró"** (cliente con al menos una orden).
 
 La infraestructura Shopify ya está implementada y funcionando. **No se modifica su comportamiento base.**
 
-| Componente | Archivo | Estado |
-|---|---|---|
-| Snippet Liquid con URL firmada (HMAC) | `apps/demo/shopify-templates/page.clara.liquid` | Existe (usa iframe) |
-| Generación HMAC `hmac_sha256` | en el Liquid | Existe |
-| Validación HMAC timing-safe | `apps/demo/src/shopify/security.ts` | Existe, sin cambios |
-| Endpoint de validación | `apps/demo/app/api/shopify-customer/route.ts` | Existe, se extiende |
-| Consumo de params + estado | `apps/demo/app/page.tsx` (`verifyShopifyCustomer`) | Existe, se extiende |
-| Cache DB + session tracking | `apps/demo/src/lib/db/queries.ts` | Existe, sin cambios |
+| Componente                                        | Archivo                                                                                             | Estado                    |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------------- | ------------------------- |
+| Snippet Liquid con URL firmada (HMAC)             | `apps/demo/shopify-templates/page.clara.liquid`                                                     | Existe (usa iframe)       |
+| Generación HMAC `hmac_sha256`                     | en el Liquid                                                                                        | Existe                    |
+| Validación HMAC timing-safe                       | `apps/demo/src/shopify/security.ts`                                                                 | Existe, sin cambios       |
+| Endpoint de validación                            | `apps/demo/app/api/shopify-customer/route.ts`                                                       | Existe, se extiende       |
+| Consumo de params + estado                        | `apps/demo/app/page.tsx` (`verifyShopifyCustomer`)                                                  | Existe, se extiende       |
+| Cache DB + session tracking                       | `apps/demo/src/lib/db/queries.ts`                                                                   | Existe, sin cambios       |
 | Trigger de saludo `[START]` + contexto silencioso | `apps/demo/src/components/ClaraVoiceAgent.tsx`, `apps/demo/src/utils/heygen/elevenlabs-commands.ts` | Existe (PR #17), se afina |
 
 **Bypass del Admin API:** los datos provienen del template Liquid (acceso nativo a `customer.*` en cualquier plan Shopify), por lo que el límite de plan Basic (`SHOPIFY_PLAN_LIMITED`) **no aplica** a este flujo.
@@ -36,13 +36,13 @@ La infraestructura Shopify ya está implementada y funcionando. **No se modifica
 
 ## 3. Decisiones de diseño
 
-| Decisión | Elección | Razón |
-|---|---|---|
-| Firma HMAC | Solo `customer_id` (como hoy) | Los datos de compra son cosméticos (guían un saludo, no autorizan nada). Riesgo de manipulación aceptado. Evita reescribir Liquid + `security.ts`. |
-| Botón "volver a la tienda" | No, por ahora | Fuera de alcance. Se puede agregar después. |
-| Memoria entre sesiones | Proyecto aparte | Complejidad alta (persistencia, resumen, recall). No en este spec. |
-| Redacción del saludo | La genera el agente ElevenLabs | Nosotros pasamos hechos estructurados + directiva; el agente fraseа natural. |
-| Trigger | `[START]` (token literal) | Invisible para el usuario; el system prompt del agente lo reconoce como señal de inicio. |
+| Decisión                   | Elección                       | Razón                                                                                                                                              |
+| -------------------------- | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Firma HMAC                 | Solo `customer_id` (como hoy)  | Los datos de compra son cosméticos (guían un saludo, no autorizan nada). Riesgo de manipulación aceptado. Evita reescribir Liquid + `security.ts`. |
+| Botón "volver a la tienda" | No, por ahora                  | Fuera de alcance. Se puede agregar después.                                                                                                        |
+| Memoria entre sesiones     | Proyecto aparte                | Complejidad alta (persistencia, resumen, recall). No en este spec.                                                                                 |
+| Redacción del saludo       | La genera el agente ElevenLabs | Nosotros pasamos hechos estructurados + directiva; el agente fraseа natural.                                                                       |
+| Trigger                    | `[START]` (token literal)      | Invisible para el usuario; el system prompt del agente lo reconoce como señal de inicio.                                                           |
 
 ---
 
@@ -170,6 +170,7 @@ export interface ShopifyCustomerRequest {
 **Responsabilidad:** validar HMAC y devolver los datos (incluyendo la compra). Sin cambios de seguridad.
 
 Cambios:
+
 1. Desestructurar `last_order_product`, `last_order_date` del body.
 2. Incluirlos en el objeto `response.customer` tras validar HMAC (paso 4 actual).
 3. El cache (`cacheCustomer`) **no** se modifica para estos campos en este spec (la compra reciente puede cambiar; mantenerla fuera del cache de 24h evita servir datos viejos). Se pasan directo desde el request validado.
@@ -179,6 +180,7 @@ Cambios:
 ### 5.5 Consumo — `apps/demo/app/page.tsx`
 
 En `verifyShopifyCustomer(params)`:
+
 1. Leer `params.get("last_order_product")` y `params.get("last_order_date")`.
 2. Enviarlos en el body del POST a `/api/shopify-customer`.
 3. Al setear `customerData` desde la respuesta, incluir `lastOrderProduct` y `lastOrderDate`.
@@ -201,6 +203,7 @@ if (context.lastOrderProduct) {
 ### 5.7 Trigger — `apps/demo/src/components/ClaraVoiceAgent.tsx`
 
 El Step 2 (handshake de saludo) ya existe (PR #17). Cambio:
+
 - El trigger pasa de `session.sendUserMessage("Hola")` a `session.sendUserMessage("[START]")`.
 - Pasar `lastOrderProduct`/`lastOrderDate` de `customerData` al llamado de `sendCustomerContext`.
 
@@ -214,24 +217,26 @@ Agregar al prompt del agente `clara-ai`:
 
 ## 6. Manejo de errores y edge cases
 
-| Caso | Comportamiento |
-|---|---|
-| Cliente sin compras (`orders_count=0`) | `lastOrderProduct` ausente → saludo genérico (rama existente). |
-| `last_order_date` inválido o ausente | `formatRelativeDate` devuelve "" → se menciona el producto sin fecha. |
-| Cache hit en el endpoint | Se adjuntan `last_order_*` desde el request (no del cache). |
-| HMAC inválido | Sin cambios: 401, igual que hoy. |
-| Sin JavaScript en la tienda | `<noscript>` con link manual a Clara. |
-| Usuario llega sin params (login Google directo) | Flujo existente sin cambios; sin datos de compra. |
+| Caso                                            | Comportamiento                                                        |
+| ----------------------------------------------- | --------------------------------------------------------------------- |
+| Cliente sin compras (`orders_count=0`)          | `lastOrderProduct` ausente → saludo genérico (rama existente).        |
+| `last_order_date` inválido o ausente            | `formatRelativeDate` devuelve "" → se menciona el producto sin fecha. |
+| Cache hit en el endpoint                        | Se adjuntan `last_order_*` desde el request (no del cache).           |
+| HMAC inválido                                   | Sin cambios: 401, igual que hoy.                                      |
+| Sin JavaScript en la tienda                     | `<noscript>` con link manual a Clara.                                 |
+| Usuario llega sin params (login Google directo) | Flujo existente sin cambios; sin datos de compra.                     |
 
 ---
 
 ## 7. Testing
 
 **Unit (vitest):**
+
 - `formatRelativeDate`: "hoy", "ayer", "hace 5 días", "" para input inválido/undefined.
 - `sendCustomerContext`: con `lastOrderProduct` incluye la frase de compra; sin él, no.
 
 **Integración manual (preview branch):**
+
 1. Liquid genera URL con `last_order_product` → redirect a Clara.
 2. HMAC valida (customer_id) → `customerData.lastOrderProduct` presente.
 3. Al iniciar, los logs muestran el `contextual_update` con la compra + `[START]`.

@@ -17,10 +17,12 @@
 **Problem:** `prisma generate` fails on every build (`P1012`), so session tracking silently writes nothing.
 
 **Files:**
+
 - Modify: `apps/demo/prisma/schema.prisma`
 - Create: `apps/demo/prisma.config.ts`
 
 **Options (pick one in brainstorming):**
+
 - A) Migrate `url` to `prisma.config.ts` + driver adapter (Prisma 7 way)
 - B) Downgrade to `prisma@^6` + `@prisma/client@^6` (lowest risk, fastest)
 
@@ -52,6 +54,7 @@
 ### Task 4: Add test coverage for changed areas
 
 **Files:**
+
 - Create: `apps/demo/src/__tests__/lib/beta-access.test.ts`
 - Create: `apps/demo/src/__tests__/utils/elevenlabs-commands.test.ts`
 

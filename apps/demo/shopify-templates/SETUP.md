@@ -1,185 +1,143 @@
-# Shopify Integration Setup
+# Shopify → Clara — Setup (estado actual del código)
 
-## Resumen
+Guía única y vigente para conectar Shopify con Clara. Reemplaza a `REDIRECT_MIGRATION.md`
+(migración iframe→redirect, ya incorporada acá).
 
-Clara se integra con Shopify mediante un iframe que recibe datos del cliente autenticado.
-La seguridad se garantiza con HMAC-SHA256 para evitar suplantación de identidad.
+**Alcance (Opción 1):** Clara conoce **nombre + identidad + última compra**. Asesora sobre la
+rutina de lo que el cliente ya compró. Fuera de alcance: historial completo, perfil de piel
+(metafields `skin_type`/`skin_concerns`), catálogo/recomendación.
 
-## Arquitectura
+**Cómo funciona:** la página `/pages/clara` en Shopify firma el `customer.id` con HMAC y hace un
+**redirect full-page** (sin iframe) a Clara, pasando los datos del cliente por la URL. El backend
+valida el HMAC y personaliza el saludo.
+
+---
+
+## Flujo
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│  SHOPIFY (Liquid Template)                                          │
-│                                                                     │
-│  1. Cliente visita /pages/clara                                     │
-│  2. Liquid detecta si está logueado (customer object)               │
-│  3. Genera HMAC: customer_id | hmac_sha256: secret                  │
-│  4. Construye URL con params                                        │
-└─────────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│  URL GENERADA                                                       │
-│                                                                     │
-│  https://clara.betaskintech.com/                                    │
-│    ?customer_id=12345678                                            │
-│    &shopify_token=a1b2c3d4e5f6...                                   │
-│    &first_name=María                                                │
-│    &last_name=González                                              │
-│    &email=maria@ejemplo.com                                         │
-│    &orders_count=3                                                  │
-└─────────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│  CLARA (Next.js)                                                    │
-│                                                                     │
-│  1. page.tsx detecta shopify_token en URL                           │
-│  2. Llama a /api/shopify-customer con los params                    │
-│  3. API valida HMAC (timing-safe comparison)                        │
-│  4. API verifica orders > 0                                         │
-│  5. Si válido → muestra Clara personalizada                         │
-│  6. Si inválido → muestra error                                     │
-└─────────────────────────────────────────────────────────────────────┘
+Cliente logueado → /pages/clara (Shopify)
+   page.clara.liquid: token = HMAC_SHA256(customer.id, secret)
+   redirect → clara.betaskintech.com/?customer_id=…&shopify_token=…&first_name=…&last_order_product=…
+        │
+        ▼
+Clara (Next.js): page.tsx detecta shopify_token+customer_id
+   → POST /api/shopify-customer  (valida HMAC timing-safe)
+   → contextual_update con el contexto + sendUserMessage("[START]")
+   → Clara saluda por nombre y menciona la última compra
 ```
 
-## Configuración
+---
 
-### 1. Generar HMAC Secret
+## Contrato HMAC (no romper)
+
+- Backend (`src/shopify/security.ts`): `expected = HMAC_SHA256(key = SHOPIFY_HMAC_SECRET, msg = customer.id_numerico).hex`.
+- Liquid: `{{ customer.id | hmac_sha256: hmac_secret }}` → `customer.id` ya es numérico → matchea.
+- **El secreto del metafield `custom.hmac_secret` debe ser BYTE-IDÉNTICO a la env `SHOPIFY_HMAC_SECRET`** (sin espacios).
+
+Parámetros que el backend lee: `customer_id`, `shopify_token`, `first_name`, `last_name`, `email`,
+`orders_count`, `last_order_product`, `last_order_date`.
+
+---
+
+## Pasos
+
+### 1. Generar el secreto
 
 ```bash
-openssl rand -hex 32
+openssl rand -hex 32          # o: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
-Ejemplo de output:
+Guardá ese valor; va EN DOS LADOS idénticos (paso 2 y 3). **No lo commitees al repo.**
 
-```
-6d0a5094b3037442558d61e6999098eff58334eb17dd0a27f2e4890374046143
-```
+### 2. Metafield en Shopify
 
-### 2. Configurar Metafield en Shopify
+Shopify admin → **Settings → Custom data → Metafields → Shop** → **Add definition**:
 
-1. Ve a **Settings → Custom data → Store**
-2. Click **Add definition**
-3. Configurar:
-   - **Namespace and key**: `custom.hmac_secret`
-   - **Type**: Single line text
-   - **Value**: El secreto generado en paso 1
+- Namespace and key: `custom.hmac_secret`
+- Type: **Single line text**
+- Luego, en el valor del metafield de la tienda, pegar el secreto del paso 1.
 
-### 3. Configurar Variables en Vercel
+### 3. Env en Vercel (mismo valor)
 
-En **Project Settings → Environment Variables**:
+**Opción CLI** (requiere `vercel login` + `vercel link` una vez, en `apps/demo/`):
 
-| Variable                     | Valor                        | Nota                          |
-| ---------------------------- | ---------------------------- | ----------------------------- |
-| `SHOPIFY_STORE_DOMAIN`       | `betaskintech.myshopify.com` | Sin https://                  |
-| `SHOPIFY_ADMIN_ACCESS_TOKEN` | `shpat_xxxxx`                | De tu app privada             |
-| `SHOPIFY_HMAC_SECRET`        | `6d0a5094b3037...`           | **Mismo valor que metafield** |
-
-### 4. Crear Template en Shopify
-
-1. Ve a **Online Store → Themes → Edit code**
-2. En **Templates**, click **Add a new template**
-3. Seleccionar:
-   - Type: `page`
-   - Name: `clara`
-4. Copiar contenido de `page.clara.liquid`
-5. Guardar
-
-### 5. Crear Página
-
-1. Ve a **Online Store → Pages → Add page**
-2. Configurar:
-   - **Title**: Clara - Asesora Virtual
-   - **Template**: page.clara
-   - **Handle**: clara (URL será /pages/clara)
-3. Guardar
-
-## URLs por Ambiente
-
-| Ambiente       | Clara URL                | Shopify URL                      | Template                                          |
-| -------------- | ------------------------ | -------------------------------- | ------------------------------------------------- |
-| **Production** | clara.betaskintech.com   | betaskintech.cl/pages/clara      | `clara_domain = 'https://clara.betaskintech.com'` |
-| **Testing**    | testers.betaskintech.com | betaskintech.cl/pages/clara-test | Cambiar `clara_domain` en template                |
-
-## Flujos de Usuario
-
-### Flujo A: Desde Shopify (cliente logueado)
-
-```
-1. Cliente entra a betaskintech.cl/pages/clara
-2. Shopify detecta sesión activa
-3. Liquid genera URL con token HMAC
-4. Clara valida token y muestra agente personalizado
-   → "¡Hola María! Veo que ya has comprado con nosotros..."
+```bash
+cd apps/demo
+vercel login                 # interactivo (lo hace el usuario)
+vercel link                  # elegir el proyecto de Clara
+# agregar a los 3 entornos con el MISMO secreto del paso 1:
+printf '%s' '<SECRETO_PASO_1>' | vercel env add SHOPIFY_HMAC_SECRET production
+printf '%s' '<SECRETO_PASO_1>' | vercel env add SHOPIFY_HMAC_SECRET preview
+printf '%s' '<SECRETO_PASO_1>' | vercel env add SHOPIFY_HMAC_SECRET development
+vercel deploy                # o redeploy desde el dashboard para tomar la env
 ```
 
-### Flujo B: Desde Shopify (anónimo)
+**Opción dashboard:** Project Settings → Environment Variables → `SHOPIFY_HMAC_SECRET` = secreto del paso 1
+(marcar Production + Preview). Redeploy.
 
-```
-1. Visitante entra a betaskintech.cl/pages/clara
-2. Shopify no tiene sesión
-3. URL sin token: clara.betaskintech.com/
-4. Clara muestra pantalla de verificación
-   → "Ingresa tu email de compra para continuar"
-```
+> Verificá que NO quede 503: si `isHmacConfigured()` es false (env ausente) el endpoint responde 503.
 
-### Flujo C: Acceso directo
+### 4. Template + página en Shopify
 
-```
-1. Usuario entra directamente a clara.betaskintech.com
-2. Sin params de Shopify
-3. Clara muestra login
-   → Google Sign In o verificación por email
-```
+1. Online Store → **Themes → Edit code → Templates → Add a new template** → Type `page`, name `clara`.
+2. Pegar el contenido de **`page.clara.liquid`** (este folder). Por defecto apunta a producción;
+   para probar en preview, cambiar `clara_base` a `https://testers.betaskintech.com/`.
+3. Online Store → **Pages → Add page** → Title "Clara", Template `page.clara`, handle `clara` (URL `/pages/clara`).
 
-## Seguridad
+### 5. Botón de entrada
 
-### HMAC Validation
-
-El token se genera así en Liquid:
+En el theme (cuenta de cliente o menú), agregar un link:
 
 ```liquid
-assign shopify_token = customer_id | hmac_sha256: hmac_secret
+<a href="/pages/clara" class="btn">Hablá con Clara</a>
 ```
 
-Clara lo valida así:
+### 6. System prompt del agente ElevenLabs
 
-```typescript
-const expected = crypto
-  .createHmac("sha256", SHOPIFY_HMAC_SECRET)
-  .update(customer_id)
-  .digest("hex");
+Agente `agent_6901kc9x6f16e0gb7gbwhjk4514r` (`clara-ai`). **First message: VACÍO.** Agregar al system prompt:
 
-// Timing-safe comparison
-crypto.timingSafeEqual(Buffer.from(token), Buffer.from(expected));
-```
+> Cuando recibas el mensaje "[START]", es la señal de que un cliente acaba de iniciar la sesión.
+> Saludalo cálidamente por su nombre usando el contexto recibido. Si el contexto indica una compra
+> reciente, mencionala con naturalidad y ofrecele guiarlo en su rutina (ej: "Hola Ana, vi que
+> compraste el Sérum X, ¿querés que te guíe para usarlo en tu rutina?"). Como asesora de skincare de
+> BetaSkintech, aconsejá SOBRE los productos que el cliente ya compró: cómo usarlos, en qué orden y en
+> qué momento del día. Si no sabés el tipo de piel, preguntáselo. No inventes productos ni recomiendes
+> comprar nada nuevo. Nunca muestres el texto "[START]". Si no hay compra reciente, da una bienvenida
+> general y ofrecé ayuda.
 
-### Por qué es seguro
+---
 
-1. **Sin secreto, no hay token válido**: Solo Shopify y Clara conocen el secreto
-2. **Timing-safe**: Previene ataques de timing para adivinar el token
-3. **Por request**: Cada URL tiene token único basado en customer_id
-4. **No expira**: Pero solo funciona para ese customer_id específico
+## Verificación end-to-end
+
+1. Secreto en metafield (2) y env (3) **iguales**. Confirmar que el endpoint no responde 503.
+2. Login en la tienda como cliente con ≥1 orden → abrir `/pages/clara`.
+3. Confirmar **redirect full-page** (no iframe) con `customer_id`, `shopify_token`, `last_order_product` en la URL.
+4. Consola del browser: `[EL-CMD] Sending contextual_update` incluye el producto; `[START]` dispara.
+5. Clara saluda por nombre + menciona la compra, **sin** decir "[START]".
+6. **Caso negativo:** alterar `shopify_token` en la URL → backend 401 (`Invalid token`) + sesión `invalid_token` en DB.
+7. Cliente con 0 órdenes → saludo genérico, sin mención de compra.
+8. DB: fila en `sessions` con `verificationStatus = verified`.
+
+---
 
 ## Troubleshooting
 
-### Token inválido (401)
+| Síntoma                       | Causa probable                                  | Fix                                                         |
+| ----------------------------- | ----------------------------------------------- | ----------------------------------------------------------- |
+| 503 Service not configured    | `SHOPIFY_HMAC_SECRET` ausente en Vercel         | Agregar env (paso 3) + redeploy                             |
+| 401 Invalid token             | Secreto metafield ≠ env, o espacios             | Igualar byte a byte                                         |
+| Va a /login en vez de Clara   | Falta `shopify_token` o `customer_id` en la URL | Revisar que el cliente esté logueado y el metafield exista  |
+| Saludo dice "[START]"         | System prompt no configurado                    | Paso 6                                                      |
+| Caracteres raros en el nombre | url_encode mal aplicado                         | Usar `page.clara.liquid` de este folder (encodea por valor) |
 
-- Verificar que `SHOPIFY_HMAC_SECRET` en Vercel = `shop.metafields.custom.hmac_secret`
-- El secreto debe ser idéntico, sin espacios extra
+---
 
-### Customer not found (404)
+## Archivos en este folder
 
-- Verificar `SHOPIFY_STORE_DOMAIN` correcto
-- Verificar `SHOPIFY_ADMIN_ACCESS_TOKEN` tiene permisos de read_customers
-
-### Service not configured (503)
-
-- Faltan variables de entorno en Vercel
-- Hacer redeploy después de agregar variables
-
-### Iframe no carga
-
-- Verificar que el dominio permite ser embebido
-- Revisar consola del navegador para errores CORS
+| Archivo                                           | Estado                                                                |
+| ------------------------------------------------- | --------------------------------------------------------------------- |
+| `page.clara.liquid`                               | ✅ **VIGENTE** — redirect, url_encode correcto, incluye última compra |
+| `SETUP.md`                                        | ✅ Esta guía (canónica)                                               |
+| `REDIRECT_MIGRATION.md`                           | ⛔ Reemplazado por SETUP.md (histórico)                               |
+| `page.clara-v2.liquid`, `page.clara-debug.liquid` | ⛔ Variantes viejas (iframe). No usar                                 |

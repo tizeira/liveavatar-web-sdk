@@ -1,5 +1,18 @@
 import { VoiceChatConfig } from "../VoiceChat";
 
+export enum SessionMode {
+  FULL = "FULL",
+  LITE = "LITE",
+}
+
+export enum AgentType {
+  FULL = "FULL",
+  OPENAI_REALTIME = "OPENAI_REALTIME",
+  ELEVENLABS_AGENT = "ELEVENLABS_AGENT",
+  GEMINI_REALTIME = "GEMINI_REALTIME",
+  UNKNOWN = "UNKNOWN",
+}
+
 export enum SessionState {
   INACTIVE = "INACTIVE",
   CONNECTING = "CONNECTING",
@@ -12,7 +25,7 @@ export enum SessionDisconnectReason {
   UNKNOWN_REASON = "UNKNOWN_REASON",
   CLIENT_INITIATED = "CLIENT_INITIATED",
   SESSION_START_FAILED = "SESSION_START_FAILED",
-  // Consider adding other reasons: INACTIVITY_TIMEOUT, SESSION_DURATION_EXCEEDED, OUT_OF_CREDITS, etc.
+  SERVER_INITIATED = "SERVER_INITIATED",
 }
 
 export interface SessionConfig {
@@ -24,10 +37,10 @@ export interface SessionInfo {
   session_id: string;
   max_session_duration: number | null;
   // For FULL mode will always be present
-  // For CUSTOM mode, may be null
+  // For LITE mode, may be null
   livekit_url?: string;
   livekit_client_token?: string;
-  // For CUSTOM mode with WebSocket support
+  // For LITE mode with WebSocket support
   ws_url?: string;
 }
 

@@ -24,6 +24,8 @@ import {
   SessionDisconnectReason,
   SessionConfig,
   SessionInfo,
+  SessionMode,
+  AgentType,
 } from "./types";
 import {
   ConnectionQualityIndicator,
@@ -34,11 +36,68 @@ import { VoiceChat } from "../VoiceChat";
 import {
   LIVEKIT_COMMAND_CHANNEL_TOPIC,
   LIVEKIT_SERVER_RESPONSE_CHANNEL_TOPIC,
-} from "./const";
+} from "../const";
 import { SessionAPIClient } from "./SessionApiClient";
 import { splitPcm24kStringToChunks } from "../audio_utils";
 
 const HEYGEN_PARTICIPANT_ID = "heygen";
+const LIVEAVATAR_AGENT_PARTICIPANT_ID_PREFIX = "liveavatar-agent-";
+const REQUIRED_PARTICIPANTS_TIMEOUT_MS = 30_000;
+
+function decodeSessionTokenPayload(token: string): any | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length < 2) {
+      console.warn(
+        "[decodeSessionTokenPayload] Token does not look like a JWT (parts.length =",
+        parts.length,
+        "). Raw token (first 40 chars):",
+        token.slice(0, 40),
+      );
+      return null;
+    }
+    const payload = parts[1];
+    const decoded = JSON.parse(
+      atob(payload.replace(/-/g, "+").replace(/_/g, "/")),
+    );
+    return decoded;
+  } catch (e) {
+    console.warn(
+      "[decodeSessionTokenPayload] Failed to decode session token payload. Raw token (first 40 chars):",
+      token.slice(0, 40),
+      "Error:",
+      e,
+    );
+    return null;
+  }
+}
+
+function parseSessionModeFromToken(token: string): SessionMode {
+  const decoded = decodeSessionTokenPayload(token);
+  const mode = decoded?.start_session_data?.mode;
+  if (mode === SessionMode.LITE) return SessionMode.LITE;
+  if (mode === SessionMode.FULL) return SessionMode.FULL;
+  return SessionMode.FULL;
+}
+
+// TODO(LA-1410): replace heuristic once backend exposes explicit agent_type
+// claim. Today we infer ELEVENLABS_AGENT from presence of
+// elevenlabs_agent_config (and similar for other realtime providers).
+export function parseAgentTypeFromToken(token: string): AgentType {
+  const decoded = decodeSessionTokenPayload(token);
+  if (!decoded) return AgentType.UNKNOWN;
+  const data = decoded.start_session_data;
+  if (!data) return AgentType.UNKNOWN;
+  // Prefer explicit agent_type claim if backend exposes one.
+  if (typeof data.agent_type === "string") {
+    const explicit = data.agent_type.toUpperCase();
+    if (explicit in AgentType) return explicit as AgentType;
+  }
+  if (data.elevenlabs_agent_config) return AgentType.ELEVENLABS_AGENT;
+  if (data.openai_realtime_config) return AgentType.OPENAI_REALTIME;
+  if (data.gemini_realtime_config) return AgentType.GEMINI_REALTIME;
+  return AgentType.FULL;
+}
 
 export class LiveAvatarSession extends (EventEmitter as new () => TypedEmitter<
   SessionEventCallbacks & AgentEventCallbacks
@@ -55,15 +114,20 @@ export class LiveAvatarSession extends (EventEmitter as new () => TypedEmitter<
       this.emit(SessionEvent.SESSION_CONNECTION_QUALITY_CHANGED, quality),
     );
 
-  private _sessionInfo: SessionInfo | null = null;
-  private _sessionEventSocket: WebSocket | null = null;
+  protected _sessionInfo: SessionInfo | null = null;
+  protected _sessionEventSocket: WebSocket | null = null;
 
   private _state: SessionState = SessionState.INACTIVE;
   private _remoteAudioTrack: RemoteAudioTrack | null = null;
   private _remoteVideoTrack: RemoteVideoTrack | null = null;
+  private readonly _mode: SessionMode;
+  private readonly _agentType: AgentType;
 
   constructor(sessionAccessToken: string, config?: SessionConfig) {
     super();
+
+    this._mode = parseSessionModeFromToken(sessionAccessToken);
+    this._agentType = parseAgentTypeFromToken(sessionAccessToken);
 
     // Required to construct the room
     this.config = config ?? {};
@@ -84,10 +148,29 @@ export class LiveAvatarSession extends (EventEmitter as new () => TypedEmitter<
       },
     });
     this._voiceChat = new VoiceChat(this.room);
+    if (
+      this.config.voiceChat &&
+      typeof this.config.voiceChat === "object" &&
+      this.config.voiceChat.mode
+    ) {
+      this._voiceChat.setMode(this.config.voiceChat.mode);
+    }
   }
 
   public get state(): SessionState {
     return this._state;
+  }
+
+  public get mode(): SessionMode {
+    return this._mode;
+  }
+
+  public get agentType(): AgentType {
+    return this._agentType;
+  }
+
+  public get sessionId(): string | null {
+    return this._sessionInfo?.session_id ?? null;
   }
 
   public get connectionQuality(): ConnectionQuality {
@@ -121,6 +204,7 @@ export class LiveAvatarSession extends (EventEmitter as new () => TypedEmitter<
         // Track the different events from the room, server, and websocket
         this.trackEvents();
         await this.room.connect(livekitRoomUrl, livekitClientToken);
+        await this.waitForRequiredParticipants();
         this.connectionQualityIndicator.start(this.room);
       }
 
@@ -173,73 +257,93 @@ export class LiveAvatarSession extends (EventEmitter as new () => TypedEmitter<
     this._remoteAudioTrack.attach(element);
   }
 
-  public message(message: string): void {
+  public message(message: string): string {
     if (!this.assertConnected()) {
-      return;
+      throw new Error("Session needs to be connected to send command event");
     }
-
+    const event_id = this.generateEventId();
     const data = {
+      event_id: event_id,
       event_type: CommandEventsEnum.AVATAR_SPEAK_RESPONSE,
       text: message,
     };
     this.sendCommandEvent(data as CommandEvent);
+
+    return event_id;
   }
 
-  public repeat(message: string): void {
+  public repeat(message: string): string {
     if (!this.assertConnected()) {
-      return;
+      throw new Error("Session needs to be connected to send command event");
     }
 
+    const event_id = this.generateEventId();
     const data = {
+      event_id: event_id,
       event_type: CommandEventsEnum.AVATAR_SPEAK_TEXT,
       text: message,
     };
+
+    console.warn("sending repeat command event", data);
     this.sendCommandEvent(data as CommandEvent);
+
+    return event_id;
   }
 
-  public repeatAudio(audio: string): void {
+  public repeatAudio(audio: string): string {
     if (!this.assertConnected()) {
-      return;
+      throw new Error("Session needs to be connected to send command event");
     }
     if (!this._sessionEventSocket) {
       console.warn(
         "Cannot repeat audio. Please check you're using a supported mode.",
       );
-      return;
+      throw new Error("Session needs to be connected to send command event");
     }
 
+    const event_id = this.generateEventId();
     const data = {
+      event_id: event_id,
       event_type: CommandEventsEnum.AVATAR_SPEAK_AUDIO,
       audio: audio,
     };
     this.sendCommandEvent(data as CommandEvent);
+
+    return event_id;
   }
 
-  public startListening(): void {
+  public startListening(): string {
     if (!this.assertConnected()) {
-      return;
+      throw new Error("Session needs to be connected to send command event");
     }
 
+    const event_id = this.generateEventId();
     const data = {
+      event_id: event_id,
       event_type: CommandEventsEnum.AVATAR_START_LISTENING,
     };
     this.sendCommandEvent(data as CommandEvent);
+    return event_id;
   }
 
-  public stopListening(): void {
+  public stopListening(): string {
     if (!this.assertConnected()) {
-      return;
+      throw new Error("Session needs to be connected to send command event");
     }
 
+    const event_id = this.generateEventId();
     const data = {
       event_type: CommandEventsEnum.AVATAR_STOP_LISTENING,
+      event_id: event_id,
     };
     this.sendCommandEvent(data as CommandEvent);
+
+    return event_id;
   }
 
   public interrupt(): void {
     if (!this.assertConnected()) {
-      return;
+      throw new Error("Session needs to be connected to send command event");
     }
 
     const data = {
@@ -297,8 +401,17 @@ export class LiveAvatarSession extends (EventEmitter as new () => TypedEmitter<
       }
     });
 
+    this.on(AgentEventsEnum.SESSION_STOPPED, (event) => {
+      console.warn(
+        "[SDK:SESSION_STOPPED] Server stopped session, reason:",
+        event.stop_reason,
+      );
+      this.cleanup();
+      this.postStop(SessionDisconnectReason.SERVER_INITIATED);
+    });
+
     this.room.on(RoomEvent.ParticipantConnected, (participant) => {
-      console.warn("participantConnected", participant);
+      console.warn("participantConnected", participant.identity);
     });
 
     this.room.on(RoomEvent.TrackUnsubscribed, (track) => {
@@ -309,8 +422,54 @@ export class LiveAvatarSession extends (EventEmitter as new () => TypedEmitter<
       }
     });
 
-    this.room.on(RoomEvent.Disconnected, () => {
+    this.room.on(RoomEvent.Disconnected, (reason) => {
+      console.warn("Room disconnected, reason:", reason);
       this.handleRoomDisconnect();
+    });
+
+    this.room.on(RoomEvent.TrackPublished, (track) => {
+      console.warn("trackPublished", track);
+    });
+  }
+
+  private waitForRequiredParticipants(): Promise<void> {
+    if (this._mode !== SessionMode.FULL) {
+      return Promise.resolve();
+    }
+    const sessionId = this._sessionInfo?.session_id;
+    if (!sessionId) {
+      return Promise.resolve();
+    }
+    const agentId = `${LIVEAVATAR_AGENT_PARTICIPANT_ID_PREFIX}${sessionId}`;
+    const required = new Set<string>([HEYGEN_PARTICIPANT_ID, agentId]);
+    for (const p of this.room.remoteParticipants.values()) {
+      required.delete(p.identity);
+    }
+    if (required.size === 0) {
+      return Promise.resolve();
+    }
+
+    return new Promise<void>((resolve, reject) => {
+      const onConnected = (participant: { identity: string }): void => {
+        required.delete(participant.identity);
+        if (required.size === 0) {
+          cleanup();
+          resolve();
+        }
+      };
+      const timeout = setTimeout(() => {
+        cleanup();
+        reject(
+          new Error(
+            `Timed out waiting for required participants: ${Array.from(required).join(", ")}`,
+          ),
+        );
+      }, REQUIRED_PARTICIPANTS_TIMEOUT_MS);
+      const cleanup = (): void => {
+        clearTimeout(timeout);
+        this.room.off(RoomEvent.ParticipantConnected, onConnected);
+      };
+      this.room.on(RoomEvent.ParticipantConnected, onConnected);
     });
   }
 
@@ -398,9 +557,18 @@ export class LiveAvatarSession extends (EventEmitter as new () => TypedEmitter<
 
   private async configureSession(): Promise<void> {
     if (this.config.voiceChat) {
-      await this.voiceChat.start(
-        typeof this.config.voiceChat === "boolean" ? {} : this.config.voiceChat,
-      );
+      try {
+        await this.voiceChat.start(
+          typeof this.config.voiceChat === "boolean"
+            ? {}
+            : this.config.voiceChat,
+        );
+      } catch (error) {
+        console.warn(
+          "Failed to start voice chat (microphone may be unavailable):",
+          error,
+        );
+      }
     }
   }
 
@@ -468,17 +636,26 @@ export class LiveAvatarSession extends (EventEmitter as new () => TypedEmitter<
     ) {
       this.sendCommandEventToWebSocket(commandEvent);
     } else if (this.room.state === "connected") {
-      const data = new TextEncoder().encode(JSON.stringify(commandEvent));
-      this.room.localParticipant.publishData(data, {
-        reliable: true,
-        topic: LIVEKIT_COMMAND_CHANNEL_TOPIC,
-      });
+      this.publishAgentControl(commandEvent);
     } else {
       console.warn("No active connection to send command event");
     }
   }
 
-  private generateEventId(): string {
+  protected publishAgentControl(payload: object): void {
+    if (this.room.state !== "connected") {
+      throw new Error(
+        "LiveKit room not connected — cannot publish agent-control payload",
+      );
+    }
+    const data = new TextEncoder().encode(JSON.stringify(payload));
+    this.room.localParticipant.publishData(data, {
+      reliable: true,
+      topic: LIVEKIT_COMMAND_CHANNEL_TOPIC,
+    });
+  }
+
+  protected generateEventId(): string {
     // Use native browser crypto API
     if (typeof crypto !== "undefined" && crypto.randomUUID) {
       return crypto.randomUUID();
@@ -522,6 +699,9 @@ export class LiveAvatarSession extends (EventEmitter as new () => TypedEmitter<
           }),
         );
         return;
+      case CommandEventsEnum.AVATAR_SPEAK_TEXT:
+      case CommandEventsEnum.AVATAR_SPEAK_RESPONSE:
+        throw new Error("Not permitted in LITE mode");
       case CommandEventsEnum.AVATAR_INTERRUPT:
         this._sessionEventSocket.send(
           JSON.stringify({
@@ -552,7 +732,7 @@ export class LiveAvatarSession extends (EventEmitter as new () => TypedEmitter<
     }
   }
 
-  private assertConnected(): boolean {
+  protected assertConnected(): boolean {
     if (this.state !== SessionState.CONNECTED) {
       console.warn("Session is not connected");
       return false;

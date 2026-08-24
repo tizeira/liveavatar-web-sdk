@@ -106,21 +106,26 @@ model ShopifyCustomerCache {
   id String @id @default(cuid())
 
   // Shopify identifiers
-  shopifyEmail String @unique
-  shopifyId    String?
+  //
+  // La cache se indexa por shopifyId porque es el UNICO campo cubierto por la
+  // firma HMAC del template Liquid. Indexar por email permitia que un cliente
+  // con token propio valido escribiera entradas bajo el email de otra persona
+  // (cache poisoning), que despues se devolvian como si fueran legitimas.
+  shopifyId    String  @unique
+  shopifyEmail String?
 
   // Customer data (JSON cache)
   firstName    String?
   lastName     String?
   skinType     String?
   skinConcerns String[]
-  ordersCount  Int       @default(0)
+  ordersCount  Int      @default(0)
 
   // Cache metadata
   cachedAt  DateTime @default(now())
   expiresAt DateTime // TTL for cache invalidation
 
-  @@index([shopifyEmail])
+  @@index([shopifyId])
   @@index([expiresAt])
   @@map("shopify_customer_cache")
 }

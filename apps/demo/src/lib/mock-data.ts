@@ -25,10 +25,7 @@ function generateMockToken(customerId: string): string {
     return "mock_token_" + customerId;
   }
 
-  return crypto
-    .createHmac("sha256", secret)
-    .update(customerId)
-    .digest("hex");
+  return crypto.createHmac("sha256", secret).update(customerId).digest("hex");
 }
 
 /**

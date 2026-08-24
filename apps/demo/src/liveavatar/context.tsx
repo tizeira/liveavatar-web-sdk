@@ -8,7 +8,7 @@ import {
 } from "react";
 import {
   ConnectionQuality,
-  LiveAvatarSession,
+  ElevenLabsAgentSession,
   SessionState,
   SessionEvent,
   VoiceChatEvent,
@@ -19,7 +19,7 @@ import { LiveAvatarSessionMessage, CustomerData, WidgetState } from "./types";
 import { API_URL } from "../../app/api/secrets";
 
 type LiveAvatarContextProps = {
-  sessionRef: React.RefObject<LiveAvatarSession>;
+  sessionRef: React.RefObject<ElevenLabsAgentSession>;
 
   isMuted: boolean;
   voiceChatState: VoiceChatState;
@@ -42,7 +42,7 @@ type LiveAvatarContextProps = {
 export const LiveAvatarContext = createContext<LiveAvatarContextProps>({
   sessionRef: {
     current: null,
-  } as unknown as React.RefObject<LiveAvatarSession>,
+  } as unknown as React.RefObject<ElevenLabsAgentSession>,
   connectionQuality: ConnectionQuality.UNKNOWN,
   isMuted: true,
   voiceChatState: VoiceChatState.INACTIVE,
@@ -63,7 +63,9 @@ type LiveAvatarContextProviderProps = {
   customerData?: CustomerData | null;
 };
 
-const useSessionState = (sessionRef: React.RefObject<LiveAvatarSession>) => {
+const useSessionState = (
+  sessionRef: React.RefObject<ElevenLabsAgentSession>,
+) => {
   const [sessionState, setSessionState] = useState<SessionState>(
     sessionRef.current?.state || SessionState.INACTIVE,
   );
@@ -109,7 +111,9 @@ const useSessionState = (sessionRef: React.RefObject<LiveAvatarSession>) => {
   return { sessionState, isStreamReady, connectionQuality };
 };
 
-const useVoiceChatState = (sessionRef: React.RefObject<LiveAvatarSession>) => {
+const useVoiceChatState = (
+  sessionRef: React.RefObject<ElevenLabsAgentSession>,
+) => {
   const [isMuted, setIsMuted] = useState(true);
   const [voiceChatState, setVoiceChatState] = useState<VoiceChatState>(
     sessionRef.current?.voiceChat.state || VoiceChatState.INACTIVE,
@@ -138,7 +142,9 @@ const useVoiceChatState = (sessionRef: React.RefObject<LiveAvatarSession>) => {
   return { isMuted, voiceChatState };
 };
 
-const useTalkingState = (sessionRef: React.RefObject<LiveAvatarSession>) => {
+const useTalkingState = (
+  sessionRef: React.RefObject<ElevenLabsAgentSession>,
+) => {
   const [isUserTalking, setIsUserTalking] = useState(false);
   const [isAvatarTalking, setIsAvatarTalking] = useState(false);
 
@@ -204,8 +210,8 @@ export const LiveAvatarContextProvider = ({
     voiceChat: true,
     apiUrl: API_URL,
   };
-  const sessionRef = useRef<LiveAvatarSession>(
-    new LiveAvatarSession(sessionAccessToken, config),
+  const sessionRef = useRef<ElevenLabsAgentSession>(
+    new ElevenLabsAgentSession(sessionAccessToken, config),
   );
 
   const { sessionState, isStreamReady, connectionQuality } =

@@ -25,6 +25,7 @@ import type {
 import { rateLimitByEndpoint } from "@/src/lib/rate-limit";
 import { getCachedCustomer, cacheCustomer } from "@/src/lib/db/queries";
 import { prisma } from "@/src/lib/db/prisma";
+import { logger } from "@/src/lib/logger/secure-logger";
 
 export async function POST(request: NextRequest) {
   // === RATE LIMIT CHECK ===
@@ -57,7 +58,9 @@ export async function POST(request: NextRequest) {
   try {
     // Check if HMAC secret is configured
     if (!isHmacConfigured()) {
-      console.error("SHOPIFY_HMAC_SECRET not configured");
+      logger.error("SHOPIFY_HMAC_SECRET not configured", null, {
+        route: "shopify-customer",
+      });
       return NextResponse.json(
         {
           valid: false,
@@ -78,35 +81,9 @@ export async function POST(request: NextRequest) {
       last_name,
       email,
       orders_count,
+      last_order_product,
+      last_order_date,
     } = body;
-
-    // === DATABASE CACHE CHECK ===
-    // Try to get cached customer data to avoid HMAC validation + processing
-    if (email) {
-      try {
-        const cached = await getCachedCustomer(email);
-        if (cached) {
-          console.log("[CACHE HIT] Returning cached customer data for:", email);
-          return NextResponse.json({
-            valid: true,
-            hasOrders: (cached.ordersCount || 0) > 0,
-            customer: {
-              id: cached.shopifyId || customer_id,
-              email: cached.shopifyEmail,
-              firstName: cached.firstName,
-              lastName: cached.lastName,
-              ordersCount: cached.ordersCount || 0,
-              skinType: cached.skinType,
-              skinConcerns: cached.skinConcerns,
-            },
-          });
-        }
-        console.log("[CACHE MISS] No cache found for:", email);
-      } catch (cacheError) {
-        // Cache read failed - continue with normal flow
-        console.error("[CACHE ERROR]", cacheError);
-      }
-    }
 
     // 1. Validate required fields
     if (!customer_id || !shopify_token) {
@@ -137,7 +114,13 @@ export async function POST(request: NextRequest) {
 
     // 3. Verify HMAC token (timing-safe)
     if (!verifyCustomerToken(shopify_token, cleanId)) {
-      console.warn(`Invalid HMAC token for customer ${cleanId}`);
+      logger.warn(
+        "Invalid HMAC token for customer",
+        { cleanId },
+        {
+          route: "shopify-customer",
+        },
+      );
 
       // Log invalid token attempt
       try {
@@ -159,12 +142,15 @@ export async function POST(request: NextRequest) {
             verificationStatus: "invalid_token",
           },
         });
-        console.log(
-          "[SESSION TRACKING] Logged invalid token attempt for:",
-          cleanId,
+        logger.debug(
+          "[SESSION TRACKING] Logged invalid token attempt",
+          { cleanId },
+          { route: "shopify-customer" },
         );
       } catch (trackingError) {
-        console.error("[SESSION TRACKING ERROR]", trackingError);
+        logger.error("[SESSION TRACKING ERROR]", trackingError, {
+          route: "shopify-customer",
+        });
       }
 
       return NextResponse.json(
@@ -176,6 +162,44 @@ export async function POST(request: NextRequest) {
         },
         { status: 401 },
       );
+    }
+
+    // === DATABASE CACHE CHECK ===
+    // Solo despues de verificar el HMAC. La cache guarda PII, asi que leerla
+    // antes de autenticar convertia este endpoint en una fuga de datos: bastaba
+    // un POST con {"email": "..."} para recibir nombre, apellido, shopifyId y
+    // cantidad de ordenes de cualquier cliente que hubiera usado Clara en las
+    // ultimas 24h. Se indexa por cleanId (firmado), nunca por email (no firmado).
+    try {
+      const cached = await getCachedCustomer(cleanId);
+      if (cached) {
+        logger.debug("[CACHE HIT] Returning cached customer data", null, {
+          route: "shopify-customer",
+        });
+        return NextResponse.json({
+          valid: true,
+          hasOrders: (cached.ordersCount || 0) > 0,
+          customer: {
+            id: cached.shopifyId,
+            email: cached.shopifyEmail,
+            firstName: cached.firstName,
+            lastName: cached.lastName,
+            ordersCount: cached.ordersCount || 0,
+            skinType: cached.skinType,
+            skinConcerns: cached.skinConcerns,
+            lastOrderProduct: last_order_product,
+            lastOrderDate: last_order_date,
+          },
+        });
+      }
+      logger.debug("[CACHE MISS] No cache found", null, {
+        route: "shopify-customer",
+      });
+    } catch (cacheError) {
+      // Cache read failed - continue with normal flow
+      logger.error("[CACHE ERROR]", cacheError, {
+        route: "shopify-customer",
+      });
     }
 
     // 4. HMAC is valid - trust the data from Liquid template
@@ -192,6 +216,8 @@ export async function POST(request: NextRequest) {
         firstName: first_name || null,
         lastName: last_name || null,
         ordersCount: ordersCountNum,
+        lastOrderProduct: last_order_product,
+        lastOrderDate: last_order_date,
         // Note: skinType and skinConcerns require metafields in Liquid template
         // Can be added to the iframe URL later if needed
       },
@@ -199,20 +225,25 @@ export async function POST(request: NextRequest) {
 
     // === DATABASE CACHE WRITE ===
     // Cache validated customer data (24 hour TTL)
-    if (email) {
-      try {
-        await cacheCustomer({
-          shopifyEmail: email,
-          shopifyId: cleanId,
-          firstName: first_name || undefined,
-          lastName: last_name || undefined,
-          ordersCount: ordersCountNum,
-        });
-        console.log("[CACHE WRITE] Cached customer data for:", email);
-      } catch (cacheError) {
-        // Cache write failed - don't fail the request
-        console.error("[CACHE WRITE ERROR]", cacheError);
-      }
+    // Se indexa por cleanId (firmado por HMAC). Antes se indexaba por el email
+    // del body, que no esta firmado: un cliente con token propio valido podia
+    // escribir nombre y ordersCount arbitrarios bajo el email de otra persona.
+    try {
+      await cacheCustomer({
+        shopifyId: cleanId,
+        shopifyEmail: email || undefined,
+        firstName: first_name || undefined,
+        lastName: last_name || undefined,
+        ordersCount: ordersCountNum,
+      });
+      logger.debug("[CACHE WRITE] Cached customer data", null, {
+        route: "shopify-customer",
+      });
+    } catch (cacheError) {
+      // Cache write failed - don't fail the request
+      logger.error("[CACHE WRITE ERROR]", cacheError, {
+        route: "shopify-customer",
+      });
     }
 
     // === SESSION TRACKING ===
@@ -236,18 +267,23 @@ export async function POST(request: NextRequest) {
           verificationStatus: hasOrders ? "verified" : "no_orders",
         },
       });
-      console.log(
-        "[SESSION TRACKING] Logged verification for customer:",
-        cleanId,
+      logger.debug(
+        "[SESSION TRACKING] Logged verification for customer",
+        { cleanId },
+        { route: "shopify-customer" },
       );
     } catch (trackingError) {
       // Tracking failed - don't fail the request
-      console.error("[SESSION TRACKING ERROR]", trackingError);
+      logger.error("[SESSION TRACKING ERROR]", trackingError, {
+        route: "shopify-customer",
+      });
     }
 
     return NextResponse.json(response);
   } catch (error) {
-    console.error("Shopify customer validation error:", error);
+    logger.error("Shopify customer validation error", error, {
+      route: "shopify-customer",
+    });
     return NextResponse.json(
       {
         valid: false,

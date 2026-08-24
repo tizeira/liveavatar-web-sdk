@@ -38,7 +38,12 @@ export async function rateLimit(
 
   // Guard: si KV no está configurado, fail-open (no bloquear)
   if (!process.env.KV_REST_API_URL && !process.env.KV_URL) {
-    return { success: true, limit: max, remaining: max, reset: Date.now() + windowSec * 1000 };
+    return {
+      success: true,
+      limit: max,
+      remaining: max,
+      reset: Date.now() + windowSec * 1000,
+    };
   }
   const now = Date.now();
   const key = `ratelimit:${identifier}`;
@@ -138,6 +143,7 @@ export async function rateLimitByEndpoint(
     "elevenlabs-conversation": { max: 10, windowSec: 60 * 60 }, // 10 per hour
     "verify-customer": { max: 10, windowSec: 5 * 60 }, // 10 per 5min
     "shopify-customer": { max: 10, windowSec: 5 * 60 }, // 10 per 5min
+    "beta-access": { max: 5, windowSec: 15 * 60 }, // 5 attempts per 15min (anti-brute-force)
   };
 
   const config = configs[endpoint] || { max: 60, windowSec: 60 }; // Default: 60/min
@@ -145,6 +151,11 @@ export async function rateLimitByEndpoint(
     return await rateLimit(identifier, config);
   } catch {
     // KV connection error - fail-open to not block the request
-    return { success: true, limit: config.max, remaining: config.max, reset: Date.now() + config.windowSec * 1000 };
+    return {
+      success: true,
+      limit: config.max,
+      remaining: config.max,
+      reset: Date.now() + config.windowSec * 1000,
+    };
   }
 }

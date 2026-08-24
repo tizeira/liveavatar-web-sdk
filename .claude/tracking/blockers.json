@@ -1,0 +1,53 @@
+{
+  "lastUpdated": "2026-06-04",
+  "blockers": [
+    {
+      "id": "habla-sola-device-specific",
+      "description": "Clara 'habla sola', dice incoherencias y/o lip-sync malo en ciertos dispositivos de usuarios. NO se reproduce en el setup del dev (Google + parlantes al maximo NO lo reproduce).",
+      "createdDate": "2026-06-01",
+      "priority": "HIGH",
+      "hypothesis": "Eco acustico device-especifico (voz de Clara re-entra al mic abierto -> VAD/STT la transcribe -> el agente se responde a si mismo). El AEC del browser falla en ciertos dispositivos/volumenes.",
+      "action": "Construir telemetria de sesiones para capturar logs reales del dispositivo afectado. Fix candidato = forzar/verificar AEC del browser (preserva barge-in). PROHIBIDO mutear el mic por defecto (mata la interrupcion).",
+      "dependsOn": "session-telemetry"
+    },
+    {
+      "id": "db-tracking-unverified",
+      "description": "Prisma 6 compila y genera OK, pero nadie confirmo que una sesion real se escriba en Postgres.",
+      "createdDate": "2026-06-04",
+      "priority": "MEDIUM",
+      "action": "En QA de preview, correr una sesion y verificar que aparece una fila en la tabla sessions."
+    }
+  ],
+  "resolved": [
+    {
+      "id": "prisma-7-p1012",
+      "description": "Prisma 7 rompia 'prisma generate' (P1012) en cada build -> tracking muerto.",
+      "resolvedDate": "2026-06-03",
+      "solution": "Downgrade a prisma@^6 y @prisma/client@^6 (PR #18)."
+    },
+    {
+      "id": "greeting-duplicate-conversations",
+      "description": "Clara no respondia tras el saludo por 3 conversaciones ElevenLabs duplicadas.",
+      "resolvedDate": "2026-05-26",
+      "solution": "contextual_update demorado + handshake unico con guarda hasSentContextRef (PR #17)."
+    },
+    {
+      "id": "audio-choppy-websocket",
+      "description": "Audio trabado/choppy en respuestas largas (arquitectura WebSocket vieja).",
+      "resolvedDate": "2026-05-18",
+      "solution": "Obsoleto: reemplazado por el plugin de ElevenLabs Agent (PR #16). Cortes residuales atacados por PR #14."
+    },
+    {
+      "id": "mobile-405-middleware",
+      "description": "Browsers moviles bloqueaban cookies -> 405 en rutas API.",
+      "resolvedDate": "2025-12-29",
+      "solution": "Middleware permite /api/*, header x-shopify-validated, auth por ruta."
+    },
+    {
+      "id": "beta-gate-edge-runtime",
+      "description": "Beta gate crasheaba en middleware (import 'crypto' no soportado en edge).",
+      "resolvedDate": "2026-05-26",
+      "solution": "Reescrito con Web Crypto API; middleware async; /access y /api/access publicos."
+    }
+  ]
+}

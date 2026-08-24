@@ -2,15 +2,48 @@
 export const API_KEY = process.env.HEYGEN_API_KEY || "";
 export const API_URL = "https://api.liveavatar.com";
 
+// Chroma Key toggle — "true" = green screen avatar + frontend chroma key
+// Configure per-environment in Vercel: set only for Preview, not Production.
+export const CHROMA_KEY_ENABLED =
+  (process.env.CHROMA_KEY_ENABLED || "false").toLowerCase() === "true";
+
+// Chroma Key tuning (all optional — override via env vars)
+// Defaults tuned aggressively for HeyGen green screen — eliminates dots in hair/clothing
+export const CHROMA_MIN_HUE = Number(process.env.CHROMA_MIN_HUE) || 90;
+export const CHROMA_MAX_HUE = Number(process.env.CHROMA_MAX_HUE) || 160;
+export const CHROMA_MIN_SATURATION =
+  Number(process.env.CHROMA_MIN_SATURATION) || 0.08;
+export const CHROMA_EDGE_SHARPNESS =
+  Number(process.env.CHROMA_EDGE_SHARPNESS) || 10;
+
+// Custom background URLs — defaults to local images in public/backgrounds/
+// Override with env vars to use external CDN URLs
+export const CHROMA_BG_URL_DESKTOP =
+  process.env.CHROMA_BG_URL_DESKTOP || "/backgrounds/desktop.png";
+export const CHROMA_BG_URL_MOBILE =
+  process.env.CHROMA_BG_URL_MOBILE || "/backgrounds/mobile.png";
+
 // Avatar IDs - Responsive configuration
-// Mobile: Portrait aspect ratio (9:16) - optimized for vertical screens
-export const AVATAR_ID_MOBILE =
-  process.env.HEYGEN_AVATAR_ID_MOBILE || "65cca4cf-b7c8-4619-871f-84e2cf8b21d4";
-// Desktop: Landscape aspect ratio (16:9) - optimized for horizontal screens
-export const AVATAR_ID_DESKTOP =
-  process.env.HEYGEN_AVATAR_ID_DESKTOP ||
-  "073b60a9-89a8-45aa-8902-c358f64d2852";
-// Default fallback (used when no device type specified)
+// When CHROMA_KEY_ENABLED=true → use green-screen (no background) avatar IDs
+// When CHROMA_KEY_ENABLED=false → use avatars with pre-designed background
+
+// Mobile: Portrait aspect ratio (9:16)
+export const AVATAR_ID_MOBILE = CHROMA_KEY_ENABLED
+  ? process.env.HEYGEN_AVATAR_ID_MOBILE_GREENSCREEN ||
+    process.env.HEYGEN_AVATAR_ID_MOBILE ||
+    "65cca4cf-b7c8-4619-871f-84e2cf8b21d4"
+  : process.env.HEYGEN_AVATAR_ID_MOBILE ||
+    "65cca4cf-b7c8-4619-871f-84e2cf8b21d4";
+
+// Desktop: Landscape aspect ratio (16:9)
+export const AVATAR_ID_DESKTOP = CHROMA_KEY_ENABLED
+  ? process.env.HEYGEN_AVATAR_ID_DESKTOP_GREENSCREEN ||
+    process.env.HEYGEN_AVATAR_ID_DESKTOP ||
+    "073b60a9-89a8-45aa-8902-c358f64d2852"
+  : process.env.HEYGEN_AVATAR_ID_DESKTOP ||
+    "073b60a9-89a8-45aa-8902-c358f64d2852";
+
+// Default fallback
 export const AVATAR_ID = AVATAR_ID_DESKTOP;
 
 // FULL MODE Customizations
@@ -26,6 +59,10 @@ export const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 
 // ELEVENLABS VOICE AGENT
 export const ELEVENLABS_AGENT_ID = process.env.ELEVENLABS_AGENT_ID || "";
+
+// ELEVENLABS PLUGIN — HeyGen-stored secret (not the raw API key)
+export const HEYGEN_ELEVENLABS_SECRET_ID =
+  process.env.HEYGEN_ELEVENLABS_SECRET_ID || "";
 
 // SHOPIFY Configuration
 export const SHOPIFY_STORE_DOMAIN = process.env.SHOPIFY_STORE_DOMAIN || "";

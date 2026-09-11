@@ -21,6 +21,7 @@ import {
 } from "../liveavatar";
 import { useScreenSize, useFixedHeight } from "../hooks";
 import { sendCustomerContext } from "../utils/heygen/elevenlabs-commands";
+import { waitForMediaPlaybackReady } from "../utils/media-playback-readiness";
 import { useChromaKey } from "../hooks/useChromaKey";
 import type { ChromaKeyConfig } from "../hooks/useChromaKey";
 
@@ -456,6 +457,8 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
 
   // Local state: "thinking" = between USER_SPEAK_ENDED and AVATAR_SPEAK_STARTED
   const [isThinking, setIsThinking] = useState(false);
+  // Track subscription is not enough: wait for decoded/presented video frames.
+  const [isMediaPlaybackReady, setIsMediaPlaybackReady] = useState(false);
 
   // Note: removed full-screen warmup overlay (it was covering the avatar
   // while audio played). The AvatarVideo component already has its own
@@ -497,9 +500,8 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
   // creating multiple simultaneous conversations (observed: 3 conversations
   // with 3 separate greetings, none responding to user input afterward).
   //
-  // Flow: streamReady → verify mic → wait 1.5s for jitter buffer
-  //                  → contextual_update with triggerGreeting=true
-  //                  → agent generates personalized greeting
+  // Flow: streamReady → verify mic → attach media → present stable video frames
+  //                  → contextual_update → greeting trigger
   // REQUIRES: ElevenLabs agent dashboard → "First message" must be EMPTY.
   const hasStartedVoiceChatRef = useRef(false);
 
@@ -546,7 +548,7 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isStreamReady]);
 
-  // Step 2: After streamReady, do a 2-step handshake with the ElevenLabs agent:
+  // Step 2: After real media playback readiness, do a 2-step handshake:
   //
   //   2a. contextual_update → inject customer info as silent context (no response)
   //   2b. sendUserMessage("Hola") → trigger the agent's first response
@@ -560,7 +562,7 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
   // REQUIRES: ElevenLabs agent dashboard → "First message" must be EMPTY.
   useEffect(() => {
     const session = sessionRef.current;
-    if (!isStreamReady || !session) return;
+    if (!isStreamReady || !isMediaPlaybackReady || !session) return;
     if (hasSentContextRef.current) return;
     hasSentContextRef.current = true;
 
@@ -599,7 +601,7 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
 
     return () => clearTimeout(triggerTimer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isStreamReady, customerData]);
+  }, [isStreamReady, isMediaPlaybackReady, customerData]);
 
   // Step 3: After the greeting finishes (first AVATAR_SPEAK_ENDED), unmute
   // the mic so the user can respond. This prevents ambient noise from
@@ -801,12 +803,46 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isMuted]);
 
-  // Attach video element when stream is ready
+  // Attach tracks, then wait for actual presented frames before greeting.
   useEffect(() => {
-    if (isStreamReady && videoRef.current) {
-      attachElement(videoRef.current);
+    const video = videoRef.current;
+    if (!isStreamReady || !video) {
+      setIsMediaPlaybackReady(false);
+      return;
     }
-  }, [isStreamReady, attachElement]);
+
+    const abortController = new AbortController();
+    const readiness = waitForMediaPlaybackReady(video, {
+      signal: abortController.signal,
+    });
+
+    attachElement(video);
+
+    readiness
+      .then((result) => {
+        const metric =
+          `[MEDIA_READY] reason=${result.reason}` +
+          ` elapsed_ms=${Math.round(result.elapsedMs)}` +
+          ` frames=${result.framesPresented}` +
+          ` ready_state=${result.readyState}` +
+          ` chroma=${chromaKeyEnabled}`;
+
+        if (result.reason === "timeout") {
+          console.warn(metric);
+        } else {
+          console.info(metric);
+        }
+        setIsMediaPlaybackReady(true);
+      })
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === "AbortError")
+          return;
+        console.error("[MEDIA_READY] readiness probe failed", error);
+        setIsMediaPlaybackReady(true);
+      });
+
+    return () => abortController.abort();
+  }, [isStreamReady, attachElement, chromaKeyEnabled]);
 
   // Keep-alive interval to prevent HeyGen session timeout
   useEffect(() => {

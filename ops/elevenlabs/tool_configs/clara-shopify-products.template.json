@@ -1,0 +1,28 @@
+{
+  "tool_config": {
+    "type": "webhook",
+    "name": "buscar_productos_shopify",
+    "description": "Busca productos reales y publicados de Beta Skintech. Usar antes de recomendar, describir o enlazar cualquier producto. Si no devuelve resultados, no inventar productos ni URLs.",
+    "response_timeout_secs": 10,
+    "api_schema": {
+      "url": "https://testers.betaskintech.com/api/agent-tools/shopify-products",
+      "method": "POST",
+      "content_type": "application/json",
+      "request_headers": {
+        "Authorization": {
+          "secret_id": "<ELEVENLABS_CLARA_TOOL_BEARER_SECRET_ID>"
+        }
+      },
+      "request_body_schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Necesidad o producto expresado por la persona, seguido de 1 a 3 equivalentes breves en inglés para compararlos con las etiquetas del catálogo. Ejemplo: flacidez papada sagging firming double-chin."
+          }
+        },
+        "required": ["query"]
+      }
+    }
+  }
+}

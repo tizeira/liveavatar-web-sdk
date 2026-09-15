@@ -1,0 +1,112 @@
+import { createHmac } from "node:crypto";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { NextRequest } from "next/server";
+
+process.env.SHOPIFY_HMAC_SECRET = "shopify-test-secret";
+
+const mockFetchCustomerPurchaseCountById = vi.fn();
+const mockIssueTicket = vi.fn();
+const mockReadTicket = vi.fn();
+
+vi.mock("@/src/shopify/client", () => ({
+  fetchCustomerPurchaseCountById: (...args: unknown[]) =>
+    mockFetchCustomerPurchaseCountById(...args),
+}));
+
+vi.mock("@/src/lib/rate-limit", () => ({
+  rateLimitByEndpoint: vi.fn().mockResolvedValue({
+    success: true,
+    limit: 20,
+    remaining: 19,
+    reset: Date.now() + 60_000,
+  }),
+}));
+
+vi.mock("@/src/lib/clara-buyer-access", () => ({
+  CLARA_BUYER_COOKIE_NAME: "clara_buyer_access",
+  CLARA_BUYER_TICKET_TTL_SECONDS: 7200,
+  issueClaraBuyerTicket: (...args: unknown[]) => mockIssueTicket(...args),
+  readClaraBuyerTicket: (...args: unknown[]) => mockReadTicket(...args),
+}));
+
+const route = await import("@/app/api/shopify-access/route");
+
+function post(body: Record<string, unknown>) {
+  return new NextRequest("http://localhost:3001/api/shopify-access", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+function v2Body(ordersCount: number) {
+  const customerId = "9455117238574";
+  const issuedAt = Math.floor(Date.now() / 1000);
+  const payload = `v=2&customer_id=${customerId}&orders_count=${ordersCount}&issued_at=${issuedAt}`;
+  return {
+    clara_v: "2",
+    customer_id: customerId,
+    orders_count: String(ordersCount),
+    issued_at: String(issuedAt),
+    shopify_token: createHmac("sha256", "shopify-test-secret")
+      .update(payload)
+      .digest("hex"),
+    first_name: "Ana",
+    last_name: "No debe guardarse",
+    email: "not-stored@example.test",
+  };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockIssueTicket.mockResolvedValue("opaque-browser-ticket");
+  mockReadTicket.mockResolvedValue(null);
+});
+
+describe("Shopify buyer access exchange", () => {
+  it("issues an HttpOnly ticket for a fresh signed buyer link", async () => {
+    const response = await route.POST(post(v2Body(1)));
+    const json = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(json.accessMode).toBe("signed_v2");
+    expect(response.headers.get("set-cookie")).toContain(
+      "clara_buyer_access=opaque-browser-ticket",
+    );
+    expect(response.headers.get("set-cookie")).toContain("HttpOnly");
+    expect(mockIssueTicket).toHaveBeenCalledWith(
+      expect.not.objectContaining({ email: expect.anything() }),
+    );
+  });
+
+  it("rejects a valid identity with no purchases", async () => {
+    const response = await route.POST(post(v2Body(0)));
+    expect(response.status).toBe(403);
+    expect(mockIssueTicket).not.toHaveBeenCalled();
+  });
+
+  it("rejects tampered purchase entitlement", async () => {
+    const body = v2Body(1);
+    body.orders_count = "2";
+    const response = await route.POST(post(body));
+    expect(response.status).toBe(401);
+  });
+
+  it("never trusts legacy orders_count without checking Shopify", async () => {
+    const customerId = "9455117238574";
+    const token = createHmac("sha256", "shopify-test-secret")
+      .update(customerId)
+      .digest("hex");
+    mockFetchCustomerPurchaseCountById.mockResolvedValue(0);
+
+    const response = await route.POST(
+      post({
+        customer_id: customerId,
+        shopify_token: token,
+        orders_count: "999",
+      }),
+    );
+    expect(response.status).toBe(403);
+    expect(mockFetchCustomerPurchaseCountById).toHaveBeenCalledWith(customerId);
+  });
+});

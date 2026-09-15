@@ -1,6 +1,6 @@
 {% comment %}
-  Clara Page v2 - Simplified version
-  Uses dynamic iframe loading (same approach as debug page that works)
+  Clara QA access v2. The signature covers purchase entitlement and expires in
+  five minutes. Clara exchanges it for an HttpOnly ticket and cleans the URL.
 {% endcomment %}
 
 {%- liquid
@@ -10,21 +10,21 @@
 
   if customer and hmac_secret != blank
     assign customer_id = customer.id
-    assign shopify_token = customer_id | hmac_sha256: hmac_secret
+    assign orders_count = customer.orders_count
+    assign issued_at = 'now' | date: '%s'
+    assign signed_payload = 'v=2&customer_id=' | append: customer_id | append: '&orders_count=' | append: orders_count | append: '&issued_at=' | append: issued_at
+    assign shopify_token = signed_payload | hmac_sha256: hmac_secret
+    assign encoded_first_name = customer.first_name | url_encode
 
     assign widget_url = clara_domain
-    assign widget_url = widget_url | append: '?customer_id=' | append: customer_id
+    assign widget_url = widget_url | append: '?clara_v=2&customer_id=' | append: customer_id
+    assign widget_url = widget_url | append: '&orders_count=' | append: orders_count
+    assign widget_url = widget_url | append: '&issued_at=' | append: issued_at
     assign widget_url = widget_url | append: '&shopify_token=' | append: shopify_token
 
     if customer.first_name != blank
-      assign widget_url = widget_url | append: '&first_name=' | append: customer.first_name
+      assign widget_url = widget_url | append: '&first_name=' | append: encoded_first_name
     endif
-
-    if customer.email != blank
-      assign widget_url = widget_url | append: '&email=' | append: customer.email
-    endif
-
-    assign widget_url = widget_url | append: '&orders_count=' | append: customer.orders_count
   endif
 -%}
 
@@ -72,7 +72,7 @@
 
 <script>
 (function() {
-  var url = "{{ widget_url }}";
+  var url = {{ widget_url | json }};
   var container = document.getElementById('clara-container');
   var loading = document.getElementById('clara-loading');
 

@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@auth/core": "^0.41.1",
+    "@elevenlabs/elevenlabs-js": "2.68.0",
     "@heygen/liveavatar-web-sdk": "workspace:*",
     "@prisma/client": "^6.0.0",
     "@radix-ui/react-avatar": "^1.1.11",

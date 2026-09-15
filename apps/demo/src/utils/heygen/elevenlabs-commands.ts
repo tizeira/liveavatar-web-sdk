@@ -8,6 +8,7 @@
  * @see https://elevenlabs.io/docs/eleven-agents/customization/events/client-to-server-events
  */
 import type { ElevenLabsAgentSession } from "@heygen/liveavatar-web-sdk";
+import type { ClaraConversationMemory } from "@/src/consultations/types";
 
 /**
  * Convert an ISO date to Spanish relative text for the greeting.
@@ -44,21 +45,18 @@ export function sendCustomerContext(
   session: ElevenLabsAgentSession,
   context: {
     firstName?: string;
-    lastName?: string;
-    email?: string;
     skinType?: string;
     skinConcerns?: string[];
     ordersCount?: number;
     lastOrderProduct?: string;
     lastOrderDate?: string;
+    conversationMemory?: ClaraConversationMemory;
   },
 ): void {
   const parts: string[] = [];
 
   if (context.firstName) {
-    parts.push(
-      `La cliente se llama ${context.firstName}${context.lastName ? " " + context.lastName : ""}.`,
-    );
+    parts.push(`La cliente se llama ${context.firstName}.`);
   }
 
   if (context.skinType) {
@@ -81,6 +79,27 @@ export function sendCustomerContext(
     const whenStr = formatRelativeDate(context.lastOrderDate);
     parts.push(
       `Su compra más reciente fue: ${context.lastOrderProduct}${whenStr ? ` (${whenStr})` : ""}.`,
+    );
+  }
+
+  if (context.conversationMemory?.length) {
+    const memories = context.conversationMemory.slice(0, 3).map((memory) => {
+      const when = formatRelativeDate(memory.completedAt) || "anteriormente";
+      const details = [
+        memory.summary.slice(0, 400),
+        memory.concerns.length
+          ? `Objetivos: ${memory.concerns.join(", ")}.`
+          : "",
+        memory.products.length
+          ? `Productos acordados: ${memory.products.join(", ")}.`
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+      return `${when}: ${details}`;
+    });
+    parts.push(
+      `Historial validado de consultas, de la más reciente a la más antigua: ${memories.join(" | ")} Reconocé con naturalidad que ya conversaron y preguntá cómo le resultó la recomendación anterior. No afirmes que siguió la rutina ni que obtuvo resultados.`,
     );
   }
 

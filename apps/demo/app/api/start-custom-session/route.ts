@@ -13,22 +13,33 @@ import {
   CHROMA_EDGE_SHARPNESS,
   CHROMA_BG_URL_DESKTOP,
   CHROMA_BG_URL_MOBILE,
+  SHOPIFY_HMAC_SECRET,
 } from "../secrets";
 import { NextRequest } from "next/server";
 import { rateLimitByEndpoint } from "@/src/lib/rate-limit";
-import { createSession } from "@/src/lib/db/queries";
-import {
-  verifyCustomerToken,
-  isValidCustomerId,
-  cleanCustomerId,
-} from "@/src/shopify";
 import { logger } from "@/src/lib/logger/secure-logger";
+import { randomBytes, randomUUID } from "node:crypto";
+import { getRecentClaraConversationMemory } from "@/src/consultations/repository";
+import type { ClaraConversationMemory } from "@/src/consultations/types";
+import { hashConsultationAccessToken } from "@/src/consultations/security";
+import {
+  attachClaraLiveAvatarSession,
+  cancelClaraBuyerSession,
+  CLARA_BUYER_COOKIE_NAME,
+  deriveAuthenticatedTesterKey,
+  readClaraBuyerTicket,
+  reserveClaraBuyerSession,
+} from "@/src/lib/clara-buyer-access";
 
-export async function POST(request: Request) {
+function identifierSuffix(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value.slice(-6) : null;
+}
+
+export async function POST(request: NextRequest) {
   // === RATE LIMIT CHECK ===
   // Cast to NextRequest for rate limiting (headers are compatible)
   const limitResult = await rateLimitByEndpoint(
-    request as NextRequest,
+    request,
     "start-custom-session",
   );
 
@@ -56,55 +67,40 @@ export async function POST(request: Request) {
 
   // === PARSE REQUEST BODY ===
   let deviceType: "mobile" | "desktop" = "desktop";
-  let shopifyCustomerId: string | undefined;
-  let shopifyToken: string | undefined;
 
   try {
     const body = await request.json();
     if (body.deviceType === "mobile") {
       deviceType = "mobile";
     }
-    // Optional Shopify credentials for iframe users
-    shopifyCustomerId = body.customer_id;
-    shopifyToken = body.shopify_token;
   } catch {
     // No body or invalid JSON, use default (desktop)
   }
 
   // === AUTH GUARD ===
-  // Allow either:
-  // 1. NextAuth session (Google/Credentials login)
-  // 2. Valid Shopify HMAC token (iframe users)
+  // Paid browser sessions use an opaque HttpOnly ticket issued only after a
+  // purchase-aware Shopify verification. NextAuth remains a QA tester path.
   const session = await auth();
-  let isShopifyUser = false;
-
-  // Validate Shopify credentials if provided
-  if (shopifyCustomerId && shopifyToken) {
-    const cleanId = cleanCustomerId(shopifyCustomerId);
-    if (
-      isValidCustomerId(cleanId) &&
-      verifyCustomerToken(shopifyToken, cleanId)
-    ) {
-      isShopifyUser = true;
-      logger.info(
-        "Valid Shopify HMAC",
-        { customerId: cleanId },
-        { route: "/api/start-custom-session" },
-      );
-    } else {
-      logger.warn(
-        "Invalid Shopify HMAC attempt",
-        { customerId: cleanId },
-        { route: "/api/start-custom-session" },
-      );
-    }
+  let buyerTicket = null;
+  try {
+    buyerTicket = await readClaraBuyerTicket(
+      request.cookies.get(CLARA_BUYER_COOKIE_NAME)?.value,
+    );
+  } catch {
+    return new Response(
+      JSON.stringify({
+        error: "Access service unavailable",
+        code: "CLARA_LIMITER_UNAVAILABLE",
+      }),
+      { status: 503, headers: { "Content-Type": "application/json" } },
+    );
   }
 
-  if (!session?.user && !isShopifyUser) {
+  if (!session?.user && !buyerTicket) {
     return new Response(
       JSON.stringify({
         error: "Unauthorized",
-        message: "Valid session or Shopify credentials required",
+        message: "Valid buyer access or tester session required",
       }),
       {
         status: 401,
@@ -115,6 +111,28 @@ export async function POST(request: Request) {
 
   let session_token = "";
   let session_id = "";
+  let conversationMemory: ClaraConversationMemory = [];
+  const consultationId = randomUUID();
+  const consultationAccessToken = randomBytes(32).toString("base64url");
+  let shopifyCustomerKey = buyerTicket?.buyerKey;
+  let rateLimitBuyerKey = shopifyCustomerKey;
+  if (!rateLimitBuyerKey && session?.user?.email && SHOPIFY_HMAC_SECRET) {
+    rateLimitBuyerKey = deriveAuthenticatedTesterKey(
+      session.user.email,
+      SHOPIFY_HMAC_SECRET,
+    );
+    shopifyCustomerKey = rateLimitBuyerKey;
+  }
+
+  if (!rateLimitBuyerKey) {
+    return new Response(
+      JSON.stringify({
+        error: "Unauthorized",
+        message: "A buyer identity is required",
+      }),
+      { status: 401, headers: { "Content-Type": "application/json" } },
+    );
+  }
 
   // Select avatar based on device type
   const avatarId =
@@ -147,15 +165,52 @@ export async function POST(request: Request) {
     );
   }
 
+  const reservation = await reserveClaraBuyerSession({
+    buyerKey: rateLimitBuyerKey,
+    consultationId,
+    accessTokenHash: hashConsultationAccessToken(consultationAccessToken),
+  });
+  if (!reservation.ok) {
+    const status =
+      reservation.reason === "active_session"
+        ? 409
+        : reservation.reason === "start_limit"
+          ? 429
+          : 503;
+    const message =
+      reservation.reason === "active_session"
+        ? "Ya hay una conversación de Clara activa para este comprador."
+        : reservation.reason === "start_limit"
+          ? "Alcanzaste el máximo de tres conversaciones por hora."
+          : "El control de acceso está temporalmente fuera de servicio.";
+    return new Response(
+      JSON.stringify({
+        error: message,
+        code: `CLARA_${reservation.reason.toUpperCase()}`,
+        retryAfter: reservation.retryAfter,
+      }),
+      {
+        status,
+        headers: {
+          "Content-Type": "application/json",
+          "Retry-After": String(reservation.retryAfter),
+        },
+      },
+    );
+  }
+
+  const cancelReservation = () =>
+    cancelClaraBuyerSession(rateLimitBuyerKey, consultationId);
+
   logger.info(
     "[HEYGEN] Starting LITE+ElevenLabs Plugin session",
     {
-      avatarId,
+      avatarIdSuffix: identifierSuffix(avatarId),
       deviceType,
       apiUrl: API_URL,
       hasApiKey: !!API_KEY,
       hasSecretId: !!HEYGEN_ELEVENLABS_SECRET_ID,
-      agentId: ELEVENLABS_AGENT_ID,
+      agentIdSuffix: identifierSuffix(ELEVENLABS_AGENT_ID),
     },
     { route: "/api/start-custom-session" },
   );
@@ -167,12 +222,24 @@ export async function POST(request: Request) {
       elevenlabs_agent_config: {
         secret_id: HEYGEN_ELEVENLABS_SECRET_ID,
         agent_id: ELEVENLABS_AGENT_ID,
+        dynamic_variables: {
+          // Correlates the provider's post-call webhook with this browser
+          // session. The separate recap access token is never sent upstream.
+          consultation_id: consultationId,
+        },
       },
     };
 
-    logger.debug("[HEYGEN] Request payload", heygenPayload, {
-      route: "/api/start-custom-session",
-    });
+    logger.debug(
+      "[HEYGEN] Request payload prepared",
+      {
+        mode: heygenPayload.mode,
+        avatarIdSuffix: identifierSuffix(avatarId),
+        agentIdSuffix: identifierSuffix(ELEVENLABS_AGENT_ID),
+        dynamicVariableNames: ["consultation_id"],
+      },
+      { route: "/api/start-custom-session" },
+    );
 
     const res = await fetch(`${API_URL}/v1/sessions/token`, {
       method: "POST",
@@ -238,14 +305,14 @@ export async function POST(request: Request) {
         {
           status: res.status,
           statusText: res.statusText,
-          errorMessage,
           errorCode,
-          avatarId,
-          errorDetails,
+          avatarIdSuffix: identifierSuffix(avatarId),
+          errorDetailKeys: Object.keys(errorDetails),
         },
         { route: "/api/start-custom-session" },
       );
 
+      await cancelReservation();
       return new Response(
         JSON.stringify({
           error: errorMessage,
@@ -263,7 +330,7 @@ export async function POST(request: Request) {
     logger.info(
       "[HEYGEN] Session created successfully",
       {
-        sessionId: data.data?.session_id,
+        sessionIdSuffix: identifierSuffix(data.data?.session_id),
         hasToken: !!data.data?.session_token,
       },
       {
@@ -291,6 +358,7 @@ export async function POST(request: Request) {
       { route: "/api/start-custom-session" },
     );
 
+    await cancelReservation();
     return new Response(
       JSON.stringify({
         error: err.message,
@@ -310,6 +378,7 @@ export async function POST(request: Request) {
     logger.error("[HEYGEN] Empty session token received", null, {
       route: "/api/start-custom-session",
     });
+    await cancelReservation();
     return new Response(
       JSON.stringify({
         error: "Failed to retrieve session token",
@@ -323,18 +392,31 @@ export async function POST(request: Request) {
     );
   }
 
-  // === DATABASE TRACKING ===
-  // Track session in database for analytics (non-blocking)
+  if (shopifyCustomerKey) {
+    try {
+      conversationMemory = await getRecentClaraConversationMemory(
+        shopifyCustomerKey,
+        3,
+      );
+    } catch (memoryError) {
+      logger.warn(
+        "[DB] Previous consultation memory unavailable (non-critical)",
+        { name: (memoryError as Error).name },
+        { route: "/api/start-custom-session" },
+      );
+    }
+  }
+
+  // === PRIVACY-MINIMIZED CONSULTATION STORAGE ===
+  // The buyer reservation already created the durable consultation atomically.
+  // Attaching the provider session is useful for operations, but correlation
+  // still works through consultation_id if this secondary update fails.
+  let consultationPersistenceAvailable = true;
   try {
-    await createSession({
-      sessionToken: session_token,
-      deviceType,
-      userId: session?.user?.id,
-      shopifyEmail: session?.user?.email || undefined,
-    });
+    await attachClaraLiveAvatarSession(consultationId, session_id);
     logger.debug(
       "[DB] Session tracked",
-      { sessionId: session_id },
+      { sessionIdSuffix: identifierSuffix(session_id) },
       {
         route: "/api/start-custom-session",
       },
@@ -342,6 +424,7 @@ export async function POST(request: Request) {
   } catch (dbError) {
     // Don't fail the request if DB tracking fails - just log it
     const err = dbError as Error;
+    consultationPersistenceAvailable = false;
     logger.warn(
       "[DB] Failed to track session (non-critical)",
       {
@@ -359,6 +442,10 @@ export async function POST(request: Request) {
     JSON.stringify({
       session_token,
       session_id,
+      consultation_id: consultationId,
+      consultation_access_token: consultationAccessToken,
+      consultation_persistence_available: consultationPersistenceAvailable,
+      conversation_memory: conversationMemory,
       chroma_key_enabled: CHROMA_KEY_ENABLED,
       ...(CHROMA_KEY_ENABLED && {
         chroma_config: {
@@ -375,6 +462,9 @@ export async function POST(request: Request) {
       status: 200,
       headers: {
         "Content-Type": "application/json",
+        "X-RateLimit-Limit": "3",
+        "X-RateLimit-Remaining": String(reservation.remaining),
+        "X-RateLimit-Reset": new Date(reservation.resetAt).toISOString(),
       },
     },
   );

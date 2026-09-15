@@ -1,0 +1,79 @@
+{
+  "tool_config": {
+    "type": "webhook",
+    "name": "guardar_rutina_clara",
+    "description": "Guarda el resumen y la rutina acordada. Llamar una sola vez al cerrar la consulta, después de confirmar con la persona los pasos. Los product_handle deben provenir exactamente de buscar_productos_shopify.",
+    "response_timeout_secs": 15,
+    "api_schema": {
+      "url": "https://testers.betaskintech.com/api/agent-tools/save-routine",
+      "method": "POST",
+      "content_type": "application/json",
+      "request_headers": {
+        "Authorization": {
+          "secret_id": "<ELEVENLABS_CLARA_TOOL_BEARER_SECRET_ID>"
+        }
+      },
+      "request_body_schema": {
+        "type": "object",
+        "properties": {
+          "consultation_id": {
+            "type": "string",
+            "dynamic_variable": "consultation_id"
+          },
+          "summary": {
+            "type": "string",
+            "description": "Resumen factual y breve de lo que la persona expresó y de lo acordado, sin diagnósticos médicos ni datos inventados."
+          },
+          "concerns": {
+            "type": "array",
+            "description": "Objetivos o preocupaciones que la persona expresó explícitamente.",
+            "items": {
+              "type": "string",
+              "description": "Un objetivo o preocupación expresado por la persona."
+            }
+          },
+          "cautions": {
+            "type": "array",
+            "description": "Precauciones acordadas, incluyendo derivación profesional cuando corresponda.",
+            "items": {
+              "type": "string",
+              "description": "Una precaución concreta."
+            }
+          },
+          "steps": {
+            "type": "array",
+            "description": "Pasos confirmados de la rutina, en orden de aplicación.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "moment": {
+                  "type": "string",
+                  "enum": ["morning", "evening", "weekly"],
+                  "description": "Momento de uso del paso."
+                },
+                "order": {
+                  "type": "integer",
+                  "description": "Orden de aplicación empezando en 1."
+                },
+                "instruction": {
+                  "type": "string",
+                  "description": "Instrucción breve acordada con la persona."
+                },
+                "frequency": {
+                  "type": "string",
+                  "description": "Frecuencia mencionada o acordada."
+                },
+                "product_handle": {
+                  "type": "string",
+                  "description": "Handle exacto devuelto por buscar_productos_shopify. Omitir si el paso no usa un producto Beta Skintech validado."
+                }
+              },
+              "required": ["moment", "order", "instruction"]
+            }
+          }
+        },
+        "required": ["consultation_id", "summary", "steps"]
+      }
+    }
+  }
+}

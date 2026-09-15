@@ -6,6 +6,61 @@
 import crypto from "crypto";
 import { SHOPIFY_HMAC_SECRET } from "@/app/api/secrets";
 
+export const CLARA_SHOPIFY_SIGNATURE_VERSION = "2";
+export const CLARA_SHOPIFY_LINK_MAX_AGE_SECONDS = 5 * 60;
+
+export interface ClaraShopifySignedAccess {
+  customerId: string;
+  ordersCount: number;
+  issuedAt: number;
+  version: string;
+}
+
+export function buildClaraShopifyAccessPayload(
+  input: ClaraShopifySignedAccess,
+): string {
+  return [
+    `v=${input.version}`,
+    `customer_id=${input.customerId}`,
+    `orders_count=${input.ordersCount}`,
+    `issued_at=${input.issuedAt}`,
+  ].join("&");
+}
+
+export function verifyClaraShopifyAccessToken(
+  token: string,
+  input: ClaraShopifySignedAccess,
+  nowSeconds = Math.floor(Date.now() / 1000),
+): boolean {
+  if (
+    !SHOPIFY_HMAC_SECRET ||
+    input.version !== CLARA_SHOPIFY_SIGNATURE_VERSION ||
+    !isValidCustomerId(input.customerId) ||
+    !Number.isSafeInteger(input.ordersCount) ||
+    input.ordersCount < 0 ||
+    !Number.isSafeInteger(input.issuedAt) ||
+    input.issuedAt > nowSeconds + 60 ||
+    nowSeconds - input.issuedAt > CLARA_SHOPIFY_LINK_MAX_AGE_SECONDS
+  ) {
+    return false;
+  }
+
+  const expected = crypto
+    .createHmac("sha256", SHOPIFY_HMAC_SECRET)
+    .update(buildClaraShopifyAccessPayload(input))
+    .digest("hex");
+  try {
+    const suppliedBuffer = Buffer.from(token, "hex");
+    const expectedBuffer = Buffer.from(expected, "hex");
+    return (
+      suppliedBuffer.length === expectedBuffer.length &&
+      crypto.timingSafeEqual(suppliedBuffer, expectedBuffer)
+    );
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Generate HMAC-SHA256 token for a customer ID
  * This should match the Liquid template generation:

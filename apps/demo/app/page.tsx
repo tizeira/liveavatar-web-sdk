@@ -6,7 +6,6 @@ import ClaraVoiceAgent from "../src/components/ClaraVoiceAgent";
 import CustomerVerification from "../src/components/CustomerVerification";
 import { CustomerData } from "../src/liveavatar/types";
 import { UserMenu } from "../src/components/auth/LogoutButton";
-import type { ShopifyCustomerResponse } from "@/src/shopify";
 import {
   ShopifyVerificationStates,
   type PageState as VerificationState,
@@ -34,28 +33,29 @@ export default function Home() {
   const [pageState, setPageState] = useState<PageState>("loading");
   const [customerData, setCustomerData] = useState<CustomerData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [shopifyAccessChecked, setShopifyAccessChecked] = useState(false);
 
   // Verify customer via Shopify API (for users coming from Shopify iframe)
   const verifyShopifyCustomer = useCallback(async (params: URLSearchParams) => {
     setPageState("verifying_shopify");
 
     try {
-      const response = await fetch("/api/shopify-customer", {
+      const response = await fetch("/api/shopify-access", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           customer_id: params.get("customer_id"),
           shopify_token: params.get("shopify_token"),
+          clara_v: params.get("clara_v"),
+          issued_at: params.get("issued_at"),
           first_name: params.get("first_name"),
-          last_name: params.get("last_name"),
-          email: params.get("email"),
           orders_count: params.get("orders_count"),
           last_order_product: params.get("last_order_product"),
           last_order_date: params.get("last_order_date"),
         }),
       });
 
-      const data: ShopifyCustomerResponse = await response.json();
+      const data = await response.json();
 
       // Handle specific error cases with dedicated states
       if (!response.ok) {
@@ -63,7 +63,6 @@ export default function Home() {
           // Invalid HMAC token
           setCustomerData({
             firstName: params.get("first_name") || undefined,
-            email: params.get("email") || undefined,
           });
           setPageState("invalid_token");
           return;
@@ -72,7 +71,6 @@ export default function Home() {
           // Valid token but no orders
           setCustomerData({
             firstName: params.get("first_name") || undefined,
-            email: params.get("email") || undefined,
             ordersCount: 0,
           });
           setPageState("no_orders");
@@ -84,7 +82,6 @@ export default function Home() {
       if (!data.valid || !data.hasOrders) {
         setCustomerData({
           firstName: params.get("first_name") || undefined,
-          email: params.get("email") || undefined,
           ordersCount: data.customer?.ordersCount || 0,
         });
         setPageState("no_orders");
@@ -94,33 +91,53 @@ export default function Home() {
       if (data.customer) {
         const customer = {
           firstName: data.customer.firstName || undefined,
-          lastName: data.customer.lastName || undefined,
-          email: data.customer.email || undefined,
           ordersCount: data.customer.ordersCount,
-          skinType: data.customer.skinType as CustomerData["skinType"],
-          skinConcerns: data.customer.skinConcerns,
           lastOrderProduct: data.customer.lastOrderProduct,
           lastOrderDate: data.customer.lastOrderDate,
         };
         setCustomerData(customer);
-
-        // Cache verified customer data in localStorage (24h TTL)
-        localStorage.setItem(
-          "clara_verified",
-          JSON.stringify({
-            customer,
-            verified_at: Date.now(),
-          }),
-        );
-
+        // Credentials and personal URL parameters are no longer needed after
+        // the server has exchanged them for an HttpOnly buyer ticket.
+        window.history.replaceState({}, "", window.location.pathname);
         setPageState("verified");
       }
     } catch (err) {
       console.error("Shopify verification error:", err);
       setError(err instanceof Error ? err.message : "Error de verificacion");
       setPageState("error");
+    } finally {
+      setShopifyAccessChecked(true);
     }
   }, []);
+
+  const restoreShopifyAccess = useCallback(async () => {
+    try {
+      const response = await fetch("/api/shopify-access", {
+        cache: "no-store",
+      });
+      if (!response.ok) return false;
+      const data = await response.json();
+      if (!data.valid || !data.hasOrders || !data.customer) return false;
+      setCustomerData({
+        firstName: data.customer.firstName || undefined,
+        ordersCount: data.customer.ordersCount,
+        lastOrderProduct: data.customer.lastOrderProduct || undefined,
+        lastOrderDate: data.customer.lastOrderDate || undefined,
+      });
+      setPageState("verified");
+      return true;
+    } catch {
+      return false;
+    } finally {
+      setShopifyAccessChecked(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.has("shopify_token") && params.has("customer_id")) return;
+    void restoreShopifyAccess();
+  }, [restoreShopifyAccess]);
 
   // Verify customer via email (for users with session)
   const verifySessionEmail = useCallback(
@@ -210,6 +227,18 @@ export default function Home() {
 
     const params = new URLSearchParams(window.location.search);
 
+    // Development-only visual QA for Clara's screens. Middleware blocks this
+    // query in production, and no external avatar session is created.
+    if (process.env.NODE_ENV !== "production" && params.has("design_preview")) {
+      setCustomerData({
+        firstName: "Ivan",
+        ordersCount: 1,
+        lastOrderProduct: "Booster 02 — Beta Lift",
+      });
+      setPageState("verified");
+      return;
+    }
+
     // Flow 0: Mock mode for testing (use ?mock=scenario_name)
     if (isMockMode(params)) {
       const scenario = getMockScenario(params);
@@ -245,6 +274,11 @@ export default function Home() {
     // Flow A: User coming from Shopify iframe with token
     if (params.has("shopify_token") && params.has("customer_id")) {
       verifyShopifyCustomer(params);
+      return;
+    }
+
+    if (!shopifyAccessChecked) {
+      setPageState("loading");
       return;
     }
 
@@ -298,7 +332,13 @@ export default function Home() {
     // Note: middleware redirects to /login if no session and no shopify_token
     // This state shouldn't normally be reached unless middleware allows it
     setPageState("needs_verification");
-  }, [session, sessionStatus, verifyShopifyCustomer, verifySessionEmail]);
+  }, [
+    session,
+    sessionStatus,
+    shopifyAccessChecked,
+    verifyShopifyCustomer,
+    verifySessionEmail,
+  ]);
 
   // Handle successful verification from CustomerVerification component
   const handleVerified = (data: CustomerData) => {
@@ -508,6 +548,11 @@ export default function Home() {
       <ClaraVoiceAgent
         userName={customerData?.firstName || session?.user?.name || null}
         customerData={customerData}
+        designPreview={
+          process.env.NODE_ENV !== "production" && typeof window !== "undefined"
+            ? new URLSearchParams(window.location.search).get("design_preview")
+            : null
+        }
       />
     </div>
   );

@@ -7,7 +7,14 @@ import {
   SHOPIFY_STORE_DOMAIN,
   SHOPIFY_ADMIN_ACCESS_TOKEN,
 } from "@/app/api/secrets";
-import { CUSTOMER_BY_EMAIL_QUERY, CUSTOMER_BY_ID_QUERY } from "./queries";
+import {
+  CUSTOMER_BY_EMAIL_QUERY,
+  CUSTOMER_BY_ID_QUERY,
+  CUSTOMER_PURCHASE_COUNT_BY_ID_QUERY,
+  PRODUCTS_FOR_CLARA_QUERY,
+  PRODUCT_FOR_CLARA_BY_HANDLE_QUERY,
+  PRODUCTS_FOR_CLARA_BY_HANDLES_QUERY,
+} from "./queries";
 import {
   ShopifyCustomer,
   ShopifyCustomerNode,
@@ -16,17 +23,19 @@ import {
   ShopifyOrder,
   SKIN_TYPE_KEY,
   SKIN_CONCERNS_KEY,
+  ClaraCatalogProduct,
 } from "./types";
 
-// Shopify Admin API URL (2024-01 version)
-const SHOPIFY_API_VERSION = "2024-01";
+// Current stable Admin API. Keep this server-side so the Admin token is never
+// exposed to ElevenLabs or the browser.
+const SHOPIFY_API_VERSION = "2026-07";
 const getShopifyApiUrl = () =>
   `https://${SHOPIFY_STORE_DOMAIN}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`;
 
 /**
  * Execute a GraphQL query against Shopify Admin API
  */
-async function shopifyGraphQL<T>(
+export async function shopifyGraphQL<T>(
   query: string,
   variables: Record<string, unknown>,
 ): Promise<T> {
@@ -56,6 +65,222 @@ async function shopifyGraphQL<T>(
   }
 
   return result.data;
+}
+
+type ClaraProductBaseNode = {
+  id: string;
+  title: string;
+  handle: string;
+  description: string;
+  productType: string;
+  tags: string[];
+  status: string;
+  onlineStoreUrl: string | null;
+  resourcePublicationsV2: {
+    nodes: Array<{
+      isPublished: boolean;
+      publication: { name: string };
+    }>;
+  };
+  featuredMedia?: {
+    preview?: { image?: { url: string; altText: string | null } | null } | null;
+  } | null;
+  variants: {
+    nodes: Array<{
+      availableForSale: boolean;
+      price: string;
+      compareAtPrice: string | null;
+    }>;
+  };
+};
+
+type ClaraProductNode = ClaraProductBaseNode & {
+  companionCondition?: { value: string } | null;
+  companionProducts?: {
+    references?: { nodes: ClaraProductBaseNode[] } | null;
+  } | null;
+};
+
+function toClaraCatalogProductSummary(
+  node: ClaraProductBaseNode,
+  currencyCode: string,
+  primaryDomainUrl: string,
+) {
+  const availableVariant = node.variants.nodes.find(
+    (variant) => variant.availableForSale,
+  );
+  const firstVariant = availableVariant || node.variants.nodes[0];
+  const image = node.featuredMedia?.preview?.image;
+  const isPublishedOnline = node.resourcePublicationsV2.nodes.some(
+    (item) => item.isPublished && item.publication.name === "Online Store",
+  );
+
+  return {
+    id: node.id,
+    title: node.title,
+    handle: node.handle,
+    url: isPublishedOnline
+      ? node.onlineStoreUrl ||
+        `${primaryDomainUrl.replace(/\/$/, "")}/products/${node.handle}`
+      : null,
+    imageUrl: image?.url || null,
+    imageAlt: image?.altText || null,
+    availableForSale:
+      Boolean(availableVariant) &&
+      node.status === "ACTIVE" &&
+      isPublishedOnline,
+    price: firstVariant ? { amount: firstVariant.price, currencyCode } : null,
+    compareAtPrice:
+      firstVariant?.compareAtPrice &&
+      Number(firstVariant.compareAtPrice) > Number(firstVariant.price)
+        ? { amount: firstVariant.compareAtPrice, currencyCode }
+        : null,
+  };
+}
+
+function toClaraCatalogProduct(
+  node: ClaraProductNode,
+  currencyCode: string,
+  primaryDomainUrl: string,
+): ClaraCatalogProduct {
+  const product = toClaraCatalogProductSummary(
+    node,
+    currencyCode,
+    primaryDomainUrl,
+  );
+  const companionCondition =
+    node.companionCondition?.value === "if_no_moisturizer"
+      ? "if_no_moisturizer"
+      : null;
+  const companionProducts = (node.companionProducts?.references?.nodes || [])
+    .map((companion) =>
+      toClaraCatalogProductSummary(companion, currencyCode, primaryDomainUrl),
+    )
+    .filter((companion) => companion.availableForSale && companion.url);
+
+  return {
+    ...product,
+    description: node.description.trim().slice(0, 1200),
+    companionCondition,
+    companionProducts,
+  };
+}
+
+export async function searchProductsForClara(
+  searchTerm: string,
+  limit = 5,
+): Promise<ClaraCatalogProduct[]> {
+  const cleanTerm = searchTerm
+    .trim()
+    .replace(/[\\"']/g, " ")
+    .slice(0, 120);
+  if (!cleanTerm) return [];
+
+  const data = await shopifyGraphQL<{
+    shop: { currencyCode: string; primaryDomain: { url: string } };
+    products: { nodes: ClaraProductNode[] };
+  }>(PRODUCTS_FOR_CLARA_QUERY, {
+    // Clara's catalogue is small. Shopify Admin search does not reliably match
+    // Spanish concern words inside product descriptions, so fetch the active
+    // catalogue and rank only fields that came from Shopify.
+    first: 100,
+  });
+
+  const normalize = (value: string) =>
+    value
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase();
+  const normalizedTerm = normalize(cleanTerm);
+  const tokens = normalizedTerm
+    .split(/\s+/)
+    .filter((token) => token.length >= 3);
+
+  return data.products.nodes
+    .filter((node) => node.status === "ACTIVE")
+    .map((node) => {
+      const title = normalize(node.title);
+      const haystack = normalize(
+        [
+          node.title,
+          node.handle,
+          node.description,
+          node.productType,
+          ...node.tags,
+        ].join(" "),
+      );
+      const score =
+        (title.includes(normalizedTerm) ? 20 : 0) +
+        tokens.reduce(
+          (total, token) => total + (haystack.includes(token) ? 1 : 0),
+          0,
+        );
+      return { node, score };
+    })
+    .filter(({ score }) => score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, Math.min(Math.max(limit, 1), 8))
+    .map(({ node }) =>
+      toClaraCatalogProduct(
+        node,
+        data.shop.currencyCode,
+        data.shop.primaryDomain.url,
+      ),
+    )
+    .filter((product) => product.availableForSale && product.url);
+}
+
+export async function fetchProductForClaraByHandle(
+  handle: string,
+): Promise<ClaraCatalogProduct | null> {
+  const cleanHandle = handle.trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9-]{0,254}$/.test(cleanHandle)) return null;
+
+  const data = await shopifyGraphQL<{
+    shop: { currencyCode: string; primaryDomain: { url: string } };
+    productByHandle: ClaraProductNode | null;
+  }>(PRODUCT_FOR_CLARA_BY_HANDLE_QUERY, { handle: cleanHandle });
+
+  if (!data.productByHandle || data.productByHandle.status !== "ACTIVE") {
+    return null;
+  }
+  return toClaraCatalogProduct(
+    data.productByHandle,
+    data.shop.currencyCode,
+    data.shop.primaryDomain.url,
+  );
+}
+
+export async function fetchProductsForClaraByHandles(
+  handles: string[],
+): Promise<Map<string, ClaraCatalogProduct>> {
+  const uniqueHandles = [
+    ...new Set(handles.map((handle) => handle.trim().toLowerCase())),
+  ].filter((handle) => /^[a-z0-9][a-z0-9-]{0,254}$/.test(handle));
+  if (!uniqueHandles.length) return new Map();
+
+  const data = await shopifyGraphQL<{
+    shop: { currencyCode: string; primaryDomain: { url: string } };
+    products: { nodes: ClaraProductNode[] };
+  }>(PRODUCTS_FOR_CLARA_BY_HANDLES_QUERY, {
+    first: Math.min(uniqueHandles.length, 20),
+    query: uniqueHandles.map((handle) => `handle:${handle}`).join(" OR "),
+  });
+
+  const requested = new Set(uniqueHandles);
+  return new Map(
+    data.products.nodes
+      .filter((node) => node.status === "ACTIVE" && requested.has(node.handle))
+      .map((node) =>
+        toClaraCatalogProduct(
+          node,
+          data.shop.currencyCode,
+          data.shop.primaryDomain.url,
+        ),
+      )
+      .filter((product) => product.availableForSale && product.url)
+      .map((product) => [product.handle, product]),
+  );
 }
 
 /**
@@ -160,6 +385,18 @@ export async function fetchCustomerById(
     console.error("Error fetching customer by ID:", error);
     throw error;
   }
+}
+
+export async function fetchCustomerPurchaseCountById(
+  customerId: string,
+): Promise<number | null> {
+  const gid = customerId.startsWith("gid://")
+    ? customerId
+    : `gid://shopify/Customer/${customerId}`;
+  const data = await shopifyGraphQL<{
+    customer: { numberOfOrders: number } | null;
+  }>(CUSTOMER_PURCHASE_COUNT_BY_ID_QUERY, { id: gid });
+  return data.customer?.numberOfOrders ?? null;
 }
 
 /**

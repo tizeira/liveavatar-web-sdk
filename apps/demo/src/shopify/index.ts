@@ -20,6 +20,10 @@ export {
   isValidCustomerId,
   cleanCustomerId,
   isHmacConfigured,
+  buildClaraShopifyAccessPayload,
+  verifyClaraShopifyAccessToken,
+  CLARA_SHOPIFY_SIGNATURE_VERSION,
+  CLARA_SHOPIFY_LINK_MAX_AGE_SECONDS,
 } from "./security";
 
 // Client functions

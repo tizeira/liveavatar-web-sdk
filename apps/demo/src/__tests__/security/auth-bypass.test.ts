@@ -35,25 +35,20 @@ describe("Auth Bypass Prevention", () => {
       }
     });
 
-    it("DEBE usar verifyCustomerToken para validación HMAC", async () => {
+    it("DEBE usar un ticket HttpOnly autenticado", async () => {
       const routePath = path.join(
         __dirname,
         "../../../app/api/start-custom-session/route.ts",
       );
       const routeCode = await fs.readFile(routePath, "utf-8");
 
-      // Debe importar función de verificación
-      expect(routeCode).toContain("verifyCustomerToken");
-
-      // Debe validar con HMAC
-      expect(routeCode).toMatch(/verifyCustomerToken\s*\(/);
-
-      // Debe recibir customer_id y shopify_token
-      expect(routeCode).toContain("shopifyCustomerId");
-      expect(routeCode).toContain("shopifyToken");
+      expect(routeCode).toContain("readClaraBuyerTicket");
+      expect(routeCode).toContain("CLARA_BUYER_COOKIE_NAME");
+      expect(routeCode).not.toMatch(/body\.customer_id/);
+      expect(routeCode).not.toMatch(/body\.shopify_token/);
     });
 
-    it("DEBE parsear credentials del body, NO de headers", async () => {
+    it("DEBE parsear solamente opciones no sensibles del body", async () => {
       const routePath = path.join(
         __dirname,
         "../../../app/api/start-custom-session/route.ts",
@@ -63,23 +58,20 @@ describe("Auth Bypass Prevention", () => {
       // Debe parsear body con request.json()
       expect(routeCode).toContain("request.json()");
 
-      // Debe extraer customer_id y shopify_token del body
-      expect(routeCode).toMatch(/body\.customer_id/);
-      expect(routeCode).toMatch(/body\.shopify_token/);
+      expect(routeCode).toMatch(/body\.deviceType/);
+      expect(routeCode).not.toMatch(/body\.customer_id/);
+      expect(routeCode).not.toMatch(/body\.shopify_token/);
     });
 
-    it("DEBE validar customer_id con isValidCustomerId", async () => {
+    it("DEBE reservar el límite atómico por comprador", async () => {
       const routePath = path.join(
         __dirname,
         "../../../app/api/start-custom-session/route.ts",
       );
       const routeCode = await fs.readFile(routePath, "utf-8");
 
-      // Debe importar función de validación
-      expect(routeCode).toContain("isValidCustomerId");
-
-      // Debe usar cleanCustomerId para limpiar el ID
-      expect(routeCode).toContain("cleanCustomerId");
+      expect(routeCode).toContain("reserveClaraBuyerSession");
+      expect(routeCode).toContain("cancelClaraBuyerSession");
     });
 
     it("DEBE retornar 401 con mensaje descriptivo al fallar auth", async () => {
@@ -94,22 +86,22 @@ describe("Auth Bypass Prevention", () => {
 
       // Debe incluir mensaje descriptivo
       expect(routeCode).toMatch(
-        /Valid session or Shopify credentials required/,
+        /Valid buyer access or tester session required/,
       );
     });
 
-    it("DEBE loggear intentos de HMAC inválidos", async () => {
+    it("DEBE validar y registrar HMAC inválidos en el intercambio", async () => {
       const routePath = path.join(
         __dirname,
-        "../../../app/api/start-custom-session/route.ts",
+        "../../../app/api/shopify-access/route.ts",
       );
       const routeCode = await fs.readFile(routePath, "utf-8");
 
-      // Debe loggear cuando HMAC es válido (usando logger.info)
-      expect(routeCode).toMatch(/logger\.info[\s\S]*?"Valid Shopify HMAC"/);
-
-      // Debe loggear (warn) cuando HMAC es inválido (usando logger.warn)
-      expect(routeCode).toMatch(/logger\.warn[\s\S]*?"Invalid.*HMAC/);
+      expect(routeCode).toContain("verifyClaraShopifyAccessToken");
+      expect(routeCode).toContain("verifyCustomerToken");
+      expect(routeCode).toMatch(
+        /logger\.warn[\s\S]*?"Invalid Clara Shopify access signature"/,
+      );
     });
   });
 

@@ -11,6 +11,7 @@ import {
   SessionState,
   ConnectionQuality,
   AgentEventsEnum,
+  VoiceChatState,
 } from "@heygen/liveavatar-web-sdk";
 import {
   LiveAvatarContextProvider,
@@ -24,33 +25,27 @@ import { sendCustomerContext } from "../utils/heygen/elevenlabs-commands";
 import { waitForMediaPlaybackReady } from "../utils/media-playback-readiness";
 import { useChromaKey } from "../hooks/useChromaKey";
 import type { ChromaKeyConfig } from "../hooks/useChromaKey";
+import type {
+  ClaraConsultationResult,
+  ClaraConversationMemory,
+} from "../consultations/types";
+import type { ClaraCatalogProduct } from "../shopify/types";
+import styles from "./ClaraVoiceAgent.module.css";
 
 // Debug (solo preview/develop)
 import { MobileLogger } from "./debug/MobileLogger";
 
 // shadcn/ui components
 import { Button } from "./ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "./ui/card";
-import { Badge } from "./ui/badge";
-import { Skeleton } from "./ui/skeleton";
-import Image from "next/image";
-
 // Lucide icons
 import {
-  Phone,
   PhoneOff,
   Mic,
   MicOff,
-  Loader2,
   Clock,
   MessageSquare,
   Bug,
+  ChevronLeft,
 } from "lucide-react";
 
 // Toast notifications
@@ -72,6 +67,32 @@ const SESSION_LIMIT_ENABLED = true;
 const SESSION_LIMIT_MINUTES = 10;
 // Warning before session ends (in seconds)
 const SESSION_WARNING_SECONDS = 30;
+
+const BrandMark: React.FC<{ dark?: boolean; className?: string }> = ({
+  dark = false,
+  className = "",
+}) => (
+  <div
+    className={`${styles.brand} ${styles.display} ${dark ? styles.brandOnDark : ""} ${className}`}
+    aria-label="Beta Skintech"
+  >
+    <span className={styles.brandBeta}>BETA</span>
+    <span className={styles.brandSkintech}>SKINTECH</span>
+  </div>
+);
+
+const ClaraPortrait: React.FC<{ compact?: boolean }> = ({
+  compact = false,
+}) => (
+  // eslint-disable-next-line @next/next/no-img-element
+  <img
+    src="/clara-avatar.png"
+    alt=""
+    width={compact ? 138 : 102}
+    height={compact ? 138 : 102}
+    className={styles.claraVoiceIcon}
+  />
+);
 
 // ============================================
 // SESSION EXPIRY WARNING BANNER
@@ -113,68 +134,48 @@ const StatusIndicator: React.FC<StatusIndicatorProps> = ({
   isMuted,
   connectionQuality,
 }) => {
-  const getStatusContent = () => {
-    if (!isConnected) {
-      return null;
-    }
+  if (!isConnected) return null;
 
-    if (isMuted) {
-      return (
-        <Badge className="status-badge glass-morphism-strong bg-red-500/90 text-gray-900 border-red-400/40 hover:bg-red-500 shadow-lg">
-          <MicOff className="w-3 h-3 mr-1" />
-          <span className="font-medium">Silenciado</span>
-        </Badge>
-      );
-    }
+  const label = isMuted
+    ? "Silenciado"
+    : isListening
+      ? "Escuchando"
+      : isThinking
+        ? "Pensando"
+        : isSpeaking
+          ? "Hablando"
+          : connectionQuality === ConnectionQuality.BAD
+            ? "Conexión inestable"
+            : "Conectada";
+  const showMotion = isListening || isThinking || isSpeaking;
 
-    if (isListening) {
-      return (
-        <Badge className="status-badge glass-morphism-strong bg-emerald-500/90 text-gray-900 border-emerald-400/40 status-pulse hover:bg-emerald-500 shadow-lg">
-          <div className="voice-wave text-gray-900 mr-1">
-            <span></span>
-            <span></span>
-            <span></span>
-            <span></span>
-          </div>
-          <span className="font-medium">Escuchando</span>
-        </Badge>
-      );
-    }
-
-    if (isThinking) {
-      return (
-        <Badge className="status-badge glass-morphism-strong bg-amber-500/90 text-gray-900 border-amber-400/40 hover:bg-amber-500 shadow-lg">
-          <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-          <span className="font-medium">Pensando</span>
-        </Badge>
-      );
-    }
-
-    if (isSpeaking) {
-      return (
-        <Badge className="status-badge glass-morphism-strong bg-blue-500/90 text-gray-900 border-blue-400/40 hover:bg-blue-500 shadow-lg">
-          <div className="voice-wave text-gray-900 mr-1">
-            <span></span>
-            <span></span>
-            <span></span>
-            <span></span>
-          </div>
-          <span className="font-medium">Respondiendo</span>
-        </Badge>
-      );
-    }
-
-    return (
-      <Badge className="status-badge badge-ios hover:bg-white/40 shadow-md">
-        <div
-          className={`connection-dot ${connectionQuality === ConnectionQuality.GOOD ? "good" : connectionQuality === ConnectionQuality.BAD ? "bad" : "unknown"} dot-pulse mr-1`}
-        />
-        <span className="font-medium text-neutral-700">Conectado</span>
-      </Badge>
-    );
-  };
-
-  return <div className="absolute top-4 left-4 z-10">{getStatusContent()}</div>;
+  return (
+    <div className={styles.statusWrap} aria-live="polite">
+      <div className={styles.statusPill}>
+        {showMotion ? (
+          <span className={styles.voiceBars} aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </span>
+        ) : isMuted ? (
+          <MicOff size={15} aria-hidden="true" />
+        ) : (
+          <span
+            className={styles.recordDot}
+            style={{
+              background:
+                connectionQuality === ConnectionQuality.BAD
+                  ? "#e5484d"
+                  : "#7fb2f2",
+            }}
+            aria-hidden="true"
+          />
+        )}
+        <span>{label}</span>
+      </div>
+    </div>
+  );
 };
 
 // ============================================
@@ -194,19 +195,18 @@ const VoiceControls: React.FC<VoiceControlsProps> = ({
   if (!isActive) return null;
 
   return (
-    <Button
+    <button
+      type="button"
       onClick={onToggleMute}
-      variant="ghost"
-      size="icon"
-      className={`floating-glass rounded-full w-12 h-12 transition-all duration-300 ${
-        isMuted
-          ? "bg-red-500/90 hover:bg-red-500 text-gray-900 border-red-400/40 shadow-xl"
-          : "glass-morphism-dark text-gray-900 border-white/20 shadow-lg"
-      }`}
+      className={`${styles.roundControl} ${styles.muteControl} ${isMuted ? styles.mutedControl : ""}`}
       title={isMuted ? "Activar micrófono" : "Silenciar"}
+      aria-pressed={isMuted}
     >
-      {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-    </Button>
+      {isMuted ? <MicOff size={27} /> : <Mic size={27} />}
+      <span className={styles.srOnly}>
+        {isMuted ? "Activar micrófono" : "Silenciar micrófono"}
+      </span>
+    </button>
   );
 };
 
@@ -214,7 +214,7 @@ const VoiceControls: React.FC<VoiceControlsProps> = ({
 // LANDING SCREEN COMPONENT (shadcn/ui redesign)
 // ============================================
 interface LandingScreenProps {
-  onStartCall: () => void;
+  onStartCall: () => Promise<void>;
   isLoading: boolean;
   userName?: string | null;
   customerData?: CustomerData | null;
@@ -231,68 +231,104 @@ const LandingScreen: React.FC<LandingScreenProps> = ({
   rateLimitCountdown = 0,
 }) => {
   const displayName = customerData?.firstName || userName;
+  const [showPermission, setShowPermission] = useState(false);
+  const [permissionDenied, setPermissionDenied] = useState(false);
+
+  const requestMicrophone = async () => {
+    setPermissionDenied(false);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((track) => track.stop());
+      await onStartCall();
+    } catch (permissionError) {
+      console.warn("[MIC] Permission request failed", permissionError);
+      setPermissionDenied(true);
+    }
+  };
 
   return (
-    <div className="flex-1 w-full flex flex-col items-center justify-center p-6 landing-gradient min-h-screen">
-      <Card className="max-w-sm w-full card-ios border-0 shadow-2xl relative z-10">
-        <CardHeader className="text-center pb-2">
-          {/* Clara Avatar */}
-          <div className="avatar-ring-ios mx-auto mb-4">
-            <div className="h-20 w-20 rounded-full glass-morphism-strong flex items-center justify-center overflow-hidden p-3">
-              <Image
-                src="/images/clara-logo.png"
-                alt="Clara Logo"
-                width={80}
-                height={80}
-                className="w-full h-full object-contain"
-              />
+    <div className={styles.lightScreen}>
+      <BrandMark className={styles.topBrand} />
+      {showPermission && (
+        <button
+          type="button"
+          className={styles.backButton}
+          onClick={() => {
+            setShowPermission(false);
+            setPermissionDenied(false);
+          }}
+          aria-label="Volver"
+        >
+          <ChevronLeft size={20} />
+        </button>
+      )}
+
+      <main className={styles.centerContent}>
+        {showPermission ? (
+          <>
+            <div
+              className={`${styles.micHalo} ${permissionDenied ? styles.micHaloDenied : ""}`}
+            >
+              <div
+                className={`${styles.micDisc} ${permissionDenied ? styles.micDiscDenied : ""}`}
+              >
+                {permissionDenied ? <MicOff size={34} /> : <Mic size={34} />}
+              </div>
             </div>
-          </div>
+            <h1 className={`${styles.permissionTitle} ${styles.display}`}>
+              {permissionDenied
+                ? "Sin micrófono no puedo escucharte"
+                : "Para conversar con Clara necesitamos acceso a tu micrófono"}
+            </h1>
+            <p className={styles.subtitle}>
+              {permissionDenied
+                ? "Activá el permiso del micrófono en tu navegador y volvé a intentarlo."
+                : "Solo se usa mientras hablás con ella. Podés silenciarlo en cualquier momento."}
+            </p>
+          </>
+        ) : (
+          <>
+            <div className={styles.portraitHalo}>
+              <div className={styles.portraitDisc}>
+                <ClaraPortrait />
+              </div>
+            </div>
+            <h1 className={`${styles.title} ${styles.display}`}>
+              {displayName ? `Hola, ${displayName}` : "Hola, soy Clara"}
+            </h1>
+            <p className={styles.subtitle}>
+              Tu asesora virtual de skincare. Conversemos sobre tu piel y cómo
+              aprovechar mejor tus productos.
+            </p>
+          </>
+        )}
+      </main>
 
-          {/* Badge */}
-          <div className="badge-ios mx-auto mb-3 text-neutral-800">
-            <span
-              className="w-2 h-2 rounded-full animate-pulse"
-              style={{ backgroundColor: "var(--platinum-600)" }}
-            />
-            Clara Skin Care Assistant
-          </div>
-
-          <CardTitle className="text-2xl font-bold text-neutral-800">
-            {displayName ? `Hola, ${displayName}!` : "Hola!"}
-          </CardTitle>
-          <CardDescription className="text-base mt-2 text-neutral-600">
-            Soy Clara, tu asistente de belleza personal. Estoy aquí para
-            ayudarte a encontrar los productos perfectos para ti.
-          </CardDescription>
-        </CardHeader>
-
-        <CardContent className="pt-4">
-          <Button
-            onClick={onStartCall}
-            disabled={isLoading || isRateLimited}
-            size="lg"
-            className="btn-ios-primary"
-          >
-            {isLoading ? (
-              <>
-                <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-                Conectando...
-              </>
-            ) : isRateLimited ? (
-              <>
-                <Clock className="w-5 h-5 mr-2" />
-                Espera {rateLimitCountdown}s
-              </>
-            ) : (
-              <>
-                <Phone className="w-5 h-5 mr-2" />
-                Iniciar Conversación
-              </>
-            )}
-          </Button>
-        </CardContent>
-      </Card>
+      <div className={styles.bottomActions}>
+        <button
+          type="button"
+          className={styles.primaryButton}
+          onClick={
+            showPermission ? requestMicrophone : () => setShowPermission(true)
+          }
+          disabled={isLoading || isRateLimited}
+        >
+          {isLoading
+            ? "Conectando con Clara…"
+            : isRateLimited
+              ? `Volvé a intentar en ${rateLimitCountdown}s`
+              : showPermission
+                ? permissionDenied
+                  ? "Volver a pedir permiso"
+                  : "Permitir micrófono"
+                : "Hablar con Clara"}
+        </button>
+        {isRateLimited && (
+          <p className={styles.errorNote}>
+            Alcanzaste el límite temporal de sesiones.
+          </p>
+        )}
+      </div>
     </div>
   );
 };
@@ -302,26 +338,19 @@ const LandingScreen: React.FC<LandingScreenProps> = ({
 // ============================================
 const ConnectingScreen: React.FC = () => {
   return (
-    <div className="flex-1 w-full flex flex-col items-center justify-center p-6 landing-gradient min-h-screen">
-      <Card className="max-w-sm w-full card-ios border-0 shadow-2xl relative z-10">
-        <CardContent className="pt-8 pb-8 text-center">
-          <div className="relative w-20 h-20 mx-auto mb-6">
-            <Skeleton className="w-20 h-20 rounded-full glass-morphism-subtle" />
-            <div className="absolute inset-0 flex items-center justify-center">
-              <Loader2
-                className="w-8 h-8 animate-spin"
-                style={{ color: "var(--platinum-700)" }}
-              />
-            </div>
-          </div>
-          <h2 className="text-xl font-semibold text-neutral-800 mb-2">
-            Conectando...
-          </h2>
-          <p className="text-neutral-600 text-sm font-medium">
-            Preparando a Clara
-          </p>
-        </CardContent>
-      </Card>
+    <div className={styles.darkScreen} role="status" aria-live="polite">
+      <BrandMark dark className={styles.topBrand} />
+      <div className={styles.connectingContent}>
+        <div className={styles.connectingPortrait}>
+          <ClaraPortrait compact />
+        </div>
+        <p className={`${styles.connectingLabel} ${styles.display}`}>
+          Conectando con Clara…
+        </p>
+        <div className={styles.progressTrack} aria-hidden="true">
+          <div className={styles.progressBar} />
+        </div>
+      </div>
     </div>
   );
 };
@@ -472,6 +501,9 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
   const [showExpiryWarning, setShowExpiryWarning] = useState(false);
   const sessionTimerRef = useRef<NodeJS.Timeout | null>(null);
   const keepAliveIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const deferredVoiceChatStopRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   // Track if customer context has been sent (one-time per session)
   const hasSentContextRef = useRef(false);
@@ -504,6 +536,7 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
   //                  → contextual_update → greeting trigger
   // REQUIRES: ElevenLabs agent dashboard → "First message" must be EMPTY.
   const hasStartedVoiceChatRef = useRef(false);
+  const [isVoiceChatReady, setIsVoiceChatReady] = useState(false);
 
   // Step 1: On streamReady, ensure mic stays MUTED during greeting.
   // The mic is unmuted in Step 3 (after AVATAR_SPEAK_ENDED) so the agent
@@ -512,9 +545,11 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
     const session = sessionRef.current;
     if (!isStreamReady || !session) return;
 
-    if (!hasStartedVoiceChatRef.current) {
-      hasStartedVoiceChatRef.current = true;
+    if (hasStartedVoiceChatRef.current) return;
+    hasStartedVoiceChatRef.current = true;
+    let cancelled = false;
 
+    const prepareVoiceChat = async () => {
       const vcState = session.voiceChat.state;
       const vcMuted = session.voiceChat.isMuted;
 
@@ -523,28 +558,46 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
         `[PLUGIN] voiceChat state="${vcState}", isMuted=${vcMuted}`,
       );
 
-      // Force-mute during greeting so ambient sound can't trigger an interrupt
-      if (vcState === "ACTIVE" && !vcMuted) {
-        console.log("[PLUGIN] Muting mic for greeting (avoid interruption)");
-        session.voiceChat
-          .mute()
-          .then(() => sendServerLog("[PLUGIN] Mic MUTED for greeting"))
-          .catch((err: unknown) => {
-            console.error("[PLUGIN] Mute failed:", err);
+      try {
+        // Force-mute during greeting so ambient sound can't trigger an interrupt.
+        // Await startup completely: unmute() is intentionally ignored by the SDK
+        // while VoiceChat is STARTING, which previously left the call muted.
+        if (vcState === VoiceChatState.ACTIVE) {
+          if (!vcMuted) await session.voiceChat.mute();
+        } else {
+          console.log("[PLUGIN] VoiceChat not active, starting muted...");
+          await session.voiceChat.start({ defaultMuted: true });
+        }
+
+        if (cancelled) return;
+        if (session.voiceChat.state !== VoiceChatState.ACTIVE) {
+          throw new Error(
+            `VoiceChat did not become active (state=${session.voiceChat.state})`,
+          );
+        }
+
+        console.log("[PLUGIN] VoiceChat ACTIVE and ready for greeting");
+        sendServerLog("[PLUGIN] VoiceChat ACTIVE and ready for greeting");
+        setIsVoiceChatReady(true);
+      } catch (err) {
+        console.error("[PLUGIN] voiceChat preparation failed:", err);
+        sendServerLog(`[PLUGIN] VoiceChat preparation failed: ${err}`, "error");
+        hasStartedVoiceChatRef.current = false;
+        if (!cancelled) {
+          toast.error("No pudimos activar el micrófono", {
+            description: "Revisá el micrófono y volvé a intentar la llamada.",
           });
-      } else if (vcState !== "ACTIVE") {
-        console.log("[PLUGIN] VoiceChat not active, starting muted...");
-        session.voiceChat
-          .start({ defaultMuted: true })
-          .then(() =>
-            sendServerLog("[PLUGIN] voiceChat started (muted for greeting)"),
-          )
-          .catch((err: unknown) => {
-            console.error("[PLUGIN] voiceChat.start() failed:", err);
-            hasStartedVoiceChatRef.current = false;
-          });
+        }
       }
-    }
+    };
+
+    void prepareVoiceChat();
+    return () => {
+      cancelled = true;
+      // React Strict Mode runs an immediate setup → cleanup → setup cycle in
+      // development. Allow the second setup to finish mic preparation.
+      hasStartedVoiceChatRef.current = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isStreamReady]);
 
@@ -562,7 +615,13 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
   // REQUIRES: ElevenLabs agent dashboard → "First message" must be EMPTY.
   useEffect(() => {
     const session = sessionRef.current;
-    if (!isStreamReady || !isMediaPlaybackReady || !session) return;
+    if (
+      !isStreamReady ||
+      !isMediaPlaybackReady ||
+      !isVoiceChatReady ||
+      !session
+    )
+      return;
     if (hasSentContextRef.current) return;
     hasSentContextRef.current = true;
 
@@ -577,13 +636,12 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
     // 2a. Silent customer info — no response triggered
     sendCustomerContext(session, {
       firstName: customerData?.firstName,
-      lastName: customerData?.lastName,
-      email: customerData?.email,
       skinType: customerData?.skinType,
       skinConcerns: customerData?.skinConcerns,
       ordersCount: customerData?.ordersCount,
       lastOrderProduct: customerData?.lastOrderProduct,
       lastOrderDate: customerData?.lastOrderDate,
+      conversationMemory: customerData?.conversationMemory,
     });
 
     // 2b. Trigger response 150ms later (gives agent time to ingest context).
@@ -601,7 +659,7 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
 
     return () => clearTimeout(triggerTimer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isStreamReady, isMediaPlaybackReady, customerData]);
+  }, [isStreamReady, isMediaPlaybackReady, isVoiceChatReady, customerData]);
 
   // Step 3: After the greeting finishes (first AVATAR_SPEAK_ENDED), unmute
   // the mic so the user can respond. This prevents ambient noise from
@@ -611,15 +669,33 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
     const session = sessionRef.current;
     if (!session) return;
 
-    const onGreetingFinished = () => {
+    const onGreetingFinished = async () => {
       if (hasUnmutedAfterGreetingRef.current) return;
       hasUnmutedAfterGreetingRef.current = true;
       console.log("[PLUGIN] Greeting ended — unmuting mic for user input");
       sendServerLog("[PLUGIN] Greeting done, unmuting mic");
-      session.voiceChat.unmute().catch((err: unknown) => {
+
+      try {
+        if (session.voiceChat.state !== VoiceChatState.ACTIVE) {
+          throw new Error(
+            `Cannot unmute VoiceChat in state ${session.voiceChat.state}`,
+          );
+        }
+
+        await session.voiceChat.unmute();
+        if (session.voiceChat.isMuted) {
+          throw new Error("VoiceChat remained muted after unmute()");
+        }
+
+        console.log("[PLUGIN] Mic ACTIVE for user input");
+        sendServerLog("[PLUGIN] Mic ACTIVE for user input");
+      } catch (err) {
         console.error("[PLUGIN] Unmute after greeting failed:", err);
         sendServerLog(`[PLUGIN] Unmute failed: ${err}`, "error");
-      });
+        toast.error("El micrófono sigue silenciado", {
+          description: "Tocá el botón del micrófono para activarlo.",
+        });
+      }
       session.off(AgentEventsEnum.AVATAR_SPEAK_ENDED, onGreetingFinished);
     };
 
@@ -903,8 +979,21 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
   // Cleanup on unmount
   useEffect(() => {
     const session = sessionRef.current;
+
+    // Cancel the deferred stop scheduled by React Strict Mode's development
+    // cleanup when the component is immediately mounted again.
+    if (deferredVoiceChatStopRef.current) {
+      clearTimeout(deferredVoiceChatStopRef.current);
+      deferredVoiceChatStopRef.current = null;
+    }
+
     return () => {
-      session?.voiceChat.stop();
+      // Defer one task so a Strict Mode remount can cancel this. On a real
+      // unmount the callback runs and releases the microphone normally.
+      deferredVoiceChatStopRef.current = setTimeout(() => {
+        session?.voiceChat.stop();
+        deferredVoiceChatStopRef.current = null;
+      }, 0);
       if (sessionTimerRef.current) {
         clearInterval(sessionTimerRef.current);
         sessionTimerRef.current = null;
@@ -921,103 +1010,90 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
     fixedHeight && isInIframe
       ? { height: `${fixedHeight}px`, overflow: "hidden" as const }
       : {};
+  const elapsedSeconds = SESSION_LIMIT_MINUTES * 60 - sessionSecondsRemaining;
+  const elapsedLabel = `${String(Math.floor(elapsedSeconds / 60)).padStart(2, "0")}:${String(elapsedSeconds % 60).padStart(2, "0")}`;
 
   return (
-    <div
-      className="flex-1 flex flex-col items-center justify-center relative safe-area-all w-full"
-      style={containerStyle}
-    >
+    <div className={styles.darkScreen} style={containerStyle}>
       {/* Session expiry warning */}
       {showExpiryWarning && (
         <SessionExpiryWarning secondsRemaining={sessionSecondsRemaining} />
       )}
 
-      {/* Main content area */}
-      <div className="flex-1 flex items-center justify-center relative p-4 md:p-6 w-full">
-        {/* Avatar container */}
-        <div
-          className={`
-          relative h-full
-          ${
-            isDesktop
-              ? "max-w-4xl w-full aspect-video"
-              : "max-w-sm w-full aspect-[9/16] md:aspect-[3/4]"
-          }
-        `}
-        >
-          {/* Status indicator */}
-          <StatusIndicator
-            isConnected={isStreamReady}
-            isListening={isUserTalking}
-            isThinking={isThinking}
-            isSpeaking={isAvatarTalking}
-            isMuted={isMuted}
-            connectionQuality={connectionQuality}
-          />
+      <div className={styles.callStage}>
+        <div className={styles.callHeader}>
+          <div
+            className={styles.timerPill}
+            aria-label={`Duración ${elapsedLabel}`}
+          >
+            <span className={styles.recordDot} aria-hidden="true" />
+            {elapsedLabel}
+          </div>
+          <BrandMark dark className={styles.callBrand} />
+          <span aria-hidden="true" />
+        </div>
 
-          {/* Avatar video */}
+        <div className={styles.videoFrame}>
           <AvatarVideo
             videoRef={videoRef}
             isStreamReady={isStreamReady}
             chromaKeyEnabled={chromaKeyEnabled}
             chromaSettings={chromaSettings}
           />
+        </div>
 
-          {/* Controls overlay */}
-          <div className="controls-overlay rounded-b-2xl">
-            <div className="flex items-center justify-between gap-4">
-              {/* Voice control */}
-              <VoiceControls
-                isMuted={isMuted}
-                isActive={isStreamReady}
-                onToggleMute={handleToggleMute}
-              />
+        <StatusIndicator
+          isConnected={isStreamReady}
+          isListening={isUserTalking}
+          isThinking={isThinking}
+          isSpeaking={isAvatarTalking}
+          isMuted={isMuted}
+          connectionQuality={connectionQuality}
+        />
 
-              {/* End call button */}
+        <div className={styles.controls}>
+          <VoiceControls
+            isMuted={isMuted}
+            isActive={isStreamReady}
+            onToggleMute={handleToggleMute}
+          />
+          <button
+            type="button"
+            onClick={onEndCall}
+            className={`${styles.roundControl} ${styles.endControl}`}
+            aria-label="Finalizar conversación"
+          >
+            <PhoneOff size={27} />
+          </button>
+
+          {DEBUG_UI && (
+            <div className="absolute left-4 bottom-4 flex gap-2">
               <Button
-                onClick={onEndCall}
-                variant="destructive"
-                size="lg"
-                className="flex items-center gap-2 flex-1 max-w-xs justify-center floating-glass glass-morphism-strong bg-red-500/95 hover:bg-red-500 border border-red-400/40 shadow-xl transition-all duration-300 text-gray-900"
+                onClick={handleTestAgent}
+                variant="outline"
+                size="sm"
+                className="text-xs bg-yellow-100 border-yellow-300 hover:bg-yellow-200"
               >
-                <PhoneOff className="w-5 h-5" />
-                <span className="font-medium">Finalizar</span>
+                <MessageSquare className="w-3 h-3 mr-1" />
+                Test Agent (text)
               </Button>
-
-              {/* Spacer for symmetry */}
-              {isStreamReady && <div className="w-11" />}
+              <Button
+                onClick={() => {
+                  const vc = sessionRef.current?.voiceChat;
+                  if (!vc) return;
+                  const msg = `state=${vc.state}, muted=${vc.isMuted}`;
+                  console.log(`[DIAG] Manual check: ${msg}`);
+                  alert(`VoiceChat: ${msg}`);
+                }}
+                variant="outline"
+                size="sm"
+                className="text-xs bg-blue-100 border-blue-300 hover:bg-blue-200"
+              >
+                <Bug className="w-3 h-3 mr-1" />
+                Mic Status
+              </Button>
             </div>
-
-            {/* DIAGNOSTIC BUTTONS — hidden unless DEBUG_UI=true */}
-            {DEBUG_UI && (
-              <div className="flex items-center justify-center gap-2 mt-2">
-                <Button
-                  onClick={handleTestAgent}
-                  variant="outline"
-                  size="sm"
-                  className="text-xs bg-yellow-100 border-yellow-300 hover:bg-yellow-200"
-                >
-                  <MessageSquare className="w-3 h-3 mr-1" />
-                  Test Agent (text)
-                </Button>
-                <Button
-                  onClick={() => {
-                    const vc = sessionRef.current?.voiceChat;
-                    if (!vc) return;
-                    const msg = `state=${vc.state}, muted=${vc.isMuted}`;
-                    console.log(`[DIAG] Manual check: ${msg}`);
-                    alert(`VoiceChat: ${msg}`);
-                  }}
-                  variant="outline"
-                  size="sm"
-                  className="text-xs bg-blue-100 border-blue-300 hover:bg-blue-200"
-                >
-                  <Bug className="w-3 h-3 mr-1" />
-                  Mic Status
-                </Button>
-              </div>
-            )}
-          </div>
+          )}
         </div>
       </div>
     </div>
@@ -1086,17 +1162,286 @@ const SessionWrapper: React.FC<SessionWrapperProps> = ({
   return <ConnectingScreen />;
 };
 
+type RecapView = "preparing" | "summary" | "routine";
+
+function formatCatalogPrice(product: ClaraCatalogProduct): string | null {
+  if (!product.price) return null;
+  const amount = Number(product.price.amount);
+  if (!Number.isFinite(amount)) return null;
+  return new Intl.NumberFormat("es-AR", {
+    style: "currency",
+    currency: product.price.currencyCode,
+    maximumFractionDigits: amount % 1 === 0 ? 0 : 2,
+  }).format(amount);
+}
+
+const RoutineProductCard: React.FC<{ product: ClaraCatalogProduct }> = ({
+  product,
+}) => {
+  if (!product.url) return null;
+  const price = formatCatalogPrice(product);
+  const compareAtPrice = product.compareAtPrice
+    ? formatCatalogPrice({ ...product, price: product.compareAtPrice })
+    : null;
+
+  return (
+    <a
+      className={styles.productCard}
+      href={product.url}
+      target="_blank"
+      rel="noreferrer"
+      aria-label={`Ver ${product.title} en la tienda`}
+    >
+      <div className={styles.productImageWrap}>
+        {product.imageUrl ? (
+          // Shopify CDN URL is validated server-side with the canonical product.
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            className={styles.productImage}
+            src={product.imageUrl}
+            alt={product.imageAlt || product.title}
+            loading="lazy"
+          />
+        ) : (
+          <span className={styles.productImageFallback} aria-hidden="true">
+            BETA
+          </span>
+        )}
+      </div>
+      <div className={styles.productDetails}>
+        <span className={styles.productName}>{product.title}</span>
+        {(price || compareAtPrice) && (
+          <span className={styles.productPrices}>
+            {price && <strong>{price}</strong>}
+            {compareAtPrice && <del>{compareAtPrice}</del>}
+            {compareAtPrice && <em>Oferta</em>}
+          </span>
+        )}
+        <span className={styles.productLink}>Ver producto</span>
+      </div>
+    </a>
+  );
+};
+
+interface SessionRecapProps {
+  view: RecapView;
+  durationSeconds: number;
+  customerData?: CustomerData | null;
+  result?: ClaraConsultationResult | null;
+  processingError?: string | null;
+  onViewChange: (view: RecapView) => void;
+  onTalkAgain: () => void;
+}
+
+const SessionRecap: React.FC<SessionRecapProps> = ({
+  view,
+  durationSeconds,
+  customerData,
+  result = null,
+  processingError = null,
+  onViewChange,
+  onTalkAgain,
+}) => {
+  const minutes = Math.max(1, Math.round(durationSeconds / 60));
+  const product = customerData?.lastOrderProduct;
+  const hasRoutine = Boolean(result?.routine?.steps.length);
+
+  if (view === "preparing") {
+    return (
+      <div className={styles.lightScreen} role="status" aria-live="polite">
+        <div className={styles.centerContent}>
+          <div className={styles.preparingDot} />
+          <p className={`${styles.connectingLabel} ${styles.display}`}>
+            {processingError || "Preparando tu resumen…"}
+          </p>
+          {processingError && (
+            <button
+              type="button"
+              className={styles.secondaryButton}
+              onClick={onTalkAgain}
+            >
+              Volver al inicio
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (view === "routine") {
+    const routine = result?.routine;
+    return (
+      <div className={styles.recapScreen}>
+        <div className={styles.recapInner}>
+          <button
+            type="button"
+            className={styles.backButton}
+            onClick={() => onViewChange("summary")}
+            aria-label="Volver al resumen"
+          >
+            <ChevronLeft size={20} />
+          </button>
+          <BrandMark className={styles.topBrand} />
+          <h1
+            className={`${styles.recapTitle} ${styles.display}`}
+            style={{ marginTop: 28 }}
+          >
+            Mi rutina
+          </h1>
+          <p className={styles.recapMeta}>Próximos pasos para tu consulta</p>
+          <div className={styles.recapCard}>
+            <div className={styles.eyebrow}>Objetivos conversados</div>
+            <p className={styles.recapText}>
+              {routine?.concerns.length
+                ? routine.concerns.join(" · ")
+                : "No se registraron objetivos suficientes para formar una rutina."}
+            </p>
+          </div>
+          {routine?.steps.map((step, index) => (
+            <div
+              className={styles.recapCard}
+              key={`${step.moment}-${step.order}-${index}`}
+            >
+              <div className={styles.eyebrow}>
+                {step.moment === "morning"
+                  ? "Mañana"
+                  : step.moment === "evening"
+                    ? "Noche"
+                    : step.moment === "morning_evening"
+                      ? "Mañana y noche"
+                      : "Semanal"}{" "}
+                · Paso {step.order}
+              </div>
+              <p className={styles.recapText}>{step.instruction}</p>
+              {step.frequency && (
+                <p className={styles.recapMeta}>{step.frequency}</p>
+              )}
+              {step.product?.url && (
+                <RoutineProductCard product={step.product} />
+              )}
+            </div>
+          ))}
+          {routine?.cautions.map((caution) => (
+            <div className={styles.recapCard} key={caution}>
+              <div className={styles.eyebrow}>A tener en cuenta</div>
+              <p className={styles.recapText}>{caution}</p>
+            </div>
+          ))}
+          <div className={styles.recapActions}>
+            <button
+              type="button"
+              className={styles.primaryButton}
+              onClick={onTalkAgain}
+            >
+              Volver a hablar con Clara
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={styles.recapScreen}>
+      <div className={styles.recapInner}>
+        <h1 className={`${styles.recapTitle} ${styles.display}`}>
+          Tu conversación con Clara
+        </h1>
+        <p className={styles.recapMeta}>Hoy · {minutes} min</p>
+        <div className={styles.recapCard}>
+          <div className={styles.eyebrow}>Resumen de tu consulta</div>
+          <p className={styles.recapText}>
+            {result?.summary ||
+              "La consulta terminó, pero el resumen todavía no está disponible."}
+          </p>
+        </div>
+        {product && (
+          <div className={styles.recapCard}>
+            <div className={styles.eyebrow}>Producto en contexto</div>
+            <p className={`${styles.recapText} ${styles.display}`}>{product}</p>
+          </div>
+        )}
+        {!hasRoutine && (
+          <div className={styles.recapCard} role="status">
+            <div className={styles.eyebrow}>Rutina pendiente</div>
+            <p className={styles.recapText}>
+              No se guardó una rutina en esta consulta. Podés hablar nuevamente
+              con Clara para revisarla y confirmarla.
+            </p>
+          </div>
+        )}
+        <div className={styles.recapActions}>
+          <button
+            type="button"
+            className={styles.primaryButton}
+            onClick={() =>
+              hasRoutine ? onViewChange("routine") : onTalkAgain()
+            }
+          >
+            {hasRoutine ? "Ver próximos pasos" : "Hablar nuevamente con Clara"}
+          </button>
+          <a
+            className={styles.secondaryButton}
+            href="https://betaskintech.com"
+            rel="noreferrer"
+          >
+            Volver a la tienda
+          </a>
+          {hasRoutine && (
+            <button
+              type="button"
+              className={styles.textButton}
+              onClick={onTalkAgain}
+            >
+              Hablar otra vez con Clara
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // ============================================
 // MAIN WIDGET COMPONENT
 // ============================================
 export interface ClaraVoiceAgentProps {
   userName?: string | null;
   customerData?: CustomerData | null;
+  designPreview?: string | null;
 }
+
+type ConsultationCredentials = {
+  id: string;
+  accessToken: string;
+};
+
+const designPreviewResult: ClaraConsultationResult = {
+  consultationId: "preview",
+  status: "completed",
+  summary:
+    "Conversaron sobre hidratación, sensibilidad y cómo incorporar los productos de forma gradual.",
+  transcript: [],
+  routine: {
+    concerns: ["Hidratación", "Sensibilidad"],
+    cautions: ["Introducí un producto nuevo por vez y usá protector solar."],
+    steps: [
+      {
+        moment: "morning",
+        order: 1,
+        instruction:
+          "Aplicá la rutina indicada por Clara sobre la piel limpia.",
+        frequency: "Todos los días",
+        product: null,
+      },
+    ],
+  },
+};
 
 export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
   userName = null,
   customerData = null,
+  designPreview = null,
 }) => {
   const [sessionToken, setSessionToken] = useState<string | null>(null);
   const [chromaKeyEnabled, setChromaKeyEnabled] = useState(false);
@@ -1110,8 +1455,26 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
   }>({});
   const [isStarting, setIsStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [recapView, setRecapView] = useState<RecapView | null>(null);
+  const [completedSessionSeconds, setCompletedSessionSeconds] = useState(0);
+  const [consultationCredentials, setConsultationCredentials] =
+    useState<ConsultationCredentials | null>(null);
+  const [consultationResult, setConsultationResult] =
+    useState<ClaraConsultationResult | null>(null);
+  const [consultationProcessingError, setConsultationProcessingError] =
+    useState<string | null>(null);
+  const [conversationMemory, setConversationMemory] =
+    useState<ClaraConversationMemory>([]);
+  const sessionStartedAtRef = useRef<number | null>(null);
   const { fixedHeight, isInIframe } = useFixedHeight();
   const { isDesktop } = useScreenSize();
+  const activeCustomerData = useMemo<CustomerData | null>(
+    () =>
+      customerData || conversationMemory.length
+        ? { ...(customerData || {}), conversationMemory }
+        : null,
+    [customerData, conversationMemory],
+  );
 
   // Rate limit state
   const [isRateLimited, setIsRateLimited] = useState(false);
@@ -1158,6 +1521,7 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
   const handleStartCall = useCallback(async () => {
     setIsStarting(true);
     setError(null);
+    setConversationMemory([]);
 
     try {
       // Use LITE mode with ElevenLabs Plugin (HeyGen handles STT/LLM/TTS server-side)
@@ -1174,25 +1538,64 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
       if (!res.ok) {
         const errorData = await res.json();
 
-        // Handle rate limit (429) specifically
-        if (res.status === 429) {
+        // Buyer-specific start quota and active-session lock.
+        if (res.status === 429 || res.status === 409) {
           const retryAfter = errorData.retryAfter || 60;
           setRateLimitCountdown(retryAfter);
 
-          // Show toast notification
-          toast.error("Límite de sesiones alcanzado", {
-            description: `Has iniciado muchas sesiones recientemente. Por favor espera ${retryAfter} segundos antes de intentar nuevamente.`,
-            duration: 5000,
-          });
+          toast.error(
+            res.status === 409
+              ? "Ya hay una conversación activa"
+              : "Límite de conversaciones alcanzado",
+            {
+              description:
+                res.status === 409
+                  ? "Finalizá la conversación abierta o esperá unos minutos para volver a intentar."
+                  : `Podés iniciar hasta tres conversaciones por hora. Volvé a intentar en ${Math.ceil(retryAfter / 60)} min.`,
+              duration: 5000,
+            },
+          );
 
           return; // Exit early, don't throw error
+        }
+
+        if (res.status === 503) {
+          toast.error("Acceso temporalmente no disponible", {
+            description:
+              "No iniciamos una sesión paga porque no pudimos validar el límite. Probá nuevamente en unos segundos.",
+          });
+          return;
         }
 
         throw new Error(errorData.error || "Failed to start session");
       }
 
-      const { session_token, chroma_key_enabled, chroma_config } =
-        await res.json();
+      const {
+        session_token,
+        chroma_key_enabled,
+        chroma_config,
+        consultation_id,
+        consultation_access_token,
+        consultation_persistence_available,
+        conversation_memory,
+      } = await res.json();
+      sessionStartedAtRef.current = Date.now();
+      setRecapView(null);
+      setConsultationResult(null);
+      setConsultationProcessingError(null);
+      setConsultationCredentials(
+        consultation_persistence_available !== false &&
+          consultation_id &&
+          consultation_access_token
+          ? {
+              id: consultation_id,
+              accessToken: consultation_access_token,
+            }
+          : null,
+      );
+      setConversationMemory(
+        Array.isArray(conversation_memory) ? conversation_memory : [],
+      );
       setSessionToken(session_token);
       setChromaKeyEnabled(chroma_key_enabled === true);
       if (chroma_config) setChromaSettings(chroma_config);
@@ -1204,7 +1607,87 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
   }, [isDesktop]);
 
   const handleSessionStopped = useCallback(() => {
+    const startedAt = sessionStartedAtRef.current;
+    setCompletedSessionSeconds(
+      startedAt ? Math.max(1, Math.round((Date.now() - startedAt) / 1000)) : 0,
+    );
+    sessionStartedAtRef.current = null;
     setSessionToken(null);
+    setRecapView("preparing");
+    if (consultationCredentials) {
+      void fetch(
+        `/api/consultations/${encodeURIComponent(consultationCredentials.id)}/release`,
+        {
+          method: "POST",
+          headers: {
+            "x-consultation-token": consultationCredentials.accessToken,
+          },
+          keepalive: true,
+        },
+      );
+    }
+  }, [consultationCredentials]);
+
+  useEffect(() => {
+    if (recapView !== "preparing") return;
+    if (!consultationCredentials) {
+      setConsultationProcessingError(
+        "No pudimos preparar el resumen de esta conversación.",
+      );
+      return;
+    }
+
+    let cancelled = false;
+    let attempts = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const pollResult = async () => {
+      attempts += 1;
+      try {
+        const response = await fetch(
+          `/api/consultations/${encodeURIComponent(consultationCredentials.id)}`,
+          {
+            headers: {
+              "x-consultation-token": consultationCredentials.accessToken,
+            },
+            cache: "no-store",
+          },
+        );
+        if (response.ok) {
+          const result = (await response.json()) as ClaraConsultationResult;
+          if (!cancelled && result.summary) {
+            setConsultationResult(result);
+            setRecapView("summary");
+            return;
+          }
+        }
+      } catch {
+        // ElevenLabs analysis is asynchronous; transient failures are retried.
+      }
+
+      if (cancelled) return;
+      if (attempts >= 30) {
+        setConsultationProcessingError(
+          "El resumen está tardando más de lo esperado. La conversación quedó guardada para procesarla.",
+        );
+        return;
+      }
+      timer = setTimeout(pollResult, 1000);
+    };
+
+    void pollResult();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [recapView, consultationCredentials]);
+
+  const handleTalkAgain = useCallback(() => {
+    setRecapView(null);
+    setError(null);
+    setConsultationCredentials(null);
+    setConsultationResult(null);
+    setConsultationProcessingError(null);
   }, []);
 
   const containerStyle =
@@ -1212,11 +1695,93 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
       ? { height: `${fixedHeight}px`, overflow: "hidden" as const }
       : {};
 
+  if (process.env.NODE_ENV !== "production" && designPreview) {
+    if (designPreview === "welcome") {
+      return (
+        <div className={styles.shell}>
+          <LandingScreen
+            onStartCall={async () => {}}
+            isLoading={false}
+            userName={userName}
+            customerData={customerData}
+          />
+        </div>
+      );
+    }
+    if (designPreview === "connecting") {
+      return (
+        <div className={styles.shell}>
+          <ConnectingScreen />
+        </div>
+      );
+    }
+    if (
+      designPreview === "preparing" ||
+      designPreview === "summary" ||
+      designPreview === "routine"
+    ) {
+      return (
+        <div className={styles.shell}>
+          <SessionRecap
+            view={designPreview}
+            durationSeconds={364}
+            customerData={customerData}
+            result={designPreviewResult}
+            onViewChange={() => {}}
+            onTalkAgain={() => {}}
+          />
+        </div>
+      );
+    }
+    if (designPreview === "call") {
+      return (
+        <div className={`${styles.shell} ${styles.darkScreen}`}>
+          <div className={styles.callStage}>
+            <div className={styles.callHeader}>
+              <div className={styles.timerPill}>
+                <span className={styles.recordDot} />
+                02:14
+              </div>
+              <BrandMark dark className={styles.callBrand} />
+              <span />
+            </div>
+            <div className={styles.videoFrame}>
+              <div aria-label="El video en vivo de Clara ocupa este espacio" />
+            </div>
+            <div className={styles.statusWrap}>
+              <div className={styles.statusPill}>
+                <span className={styles.voiceBars}>
+                  <span />
+                  <span />
+                  <span />
+                </span>
+                Hablando
+              </div>
+            </div>
+            <div className={styles.controls}>
+              <button
+                type="button"
+                className={`${styles.roundControl} ${styles.muteControl}`}
+                aria-label="Silenciar micrófono"
+              >
+                <Mic size={27} />
+              </button>
+              <button
+                type="button"
+                className={`${styles.roundControl} ${styles.endControl}`}
+                aria-label="Finalizar conversación"
+              >
+                <PhoneOff size={27} />
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+  }
+
   return (
-    <div
-      className="w-full h-full min-h-screen flex flex-col items-center justify-center bg-slate-50"
-      style={containerStyle}
-    >
+    <div className={styles.shell} style={containerStyle}>
       {error && (
         <div className="absolute top-4 left-4 right-4 z-50 bg-red-100 border border-red-300 text-red-700 px-4 py-3 rounded-lg">
           <p className="text-sm">{error}</p>
@@ -1232,7 +1797,17 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
       {/* MobileLogger: hidden unless DEBUG_UI=true */}
       {DEBUG_UI && <MobileLogger filter="" />}
 
-      {!sessionToken ? (
+      {recapView ? (
+        <SessionRecap
+          view={recapView}
+          durationSeconds={completedSessionSeconds}
+          customerData={customerData}
+          result={consultationResult}
+          processingError={consultationProcessingError}
+          onViewChange={setRecapView}
+          onTalkAgain={handleTalkAgain}
+        />
+      ) : !sessionToken ? (
         <LandingScreen
           onStartCall={handleStartCall}
           isLoading={isStarting}
@@ -1245,7 +1820,7 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
         <LiveAvatarContextProvider
           sessionAccessToken={sessionToken}
           userName={userName}
-          customerData={customerData}
+          customerData={activeCustomerData}
         >
           <SessionWrapper
             onSessionStopped={handleSessionStopped}

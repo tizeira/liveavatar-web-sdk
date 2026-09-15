@@ -30,6 +30,10 @@ import {
   hashConsultationAccessToken,
 } from "@/src/consultations/security";
 
+function identifierSuffix(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value.slice(-6) : null;
+}
+
 export async function POST(request: Request) {
   // === RATE LIMIT CHECK ===
   // Cast to NextRequest for rate limiting (headers are compatible)
@@ -94,13 +98,13 @@ export async function POST(request: Request) {
       isShopifyUser = true;
       logger.info(
         "Valid Shopify HMAC",
-        { customerId: cleanId },
+        { authenticatedBy: "shopify_hmac" },
         { route: "/api/start-custom-session" },
       );
     } else {
       logger.warn(
         "Invalid Shopify HMAC attempt",
-        { customerId: cleanId },
+        { customerIdPresent: Boolean(cleanId) },
         { route: "/api/start-custom-session" },
       );
     }
@@ -158,12 +162,12 @@ export async function POST(request: Request) {
   logger.info(
     "[HEYGEN] Starting LITE+ElevenLabs Plugin session",
     {
-      avatarId,
+      avatarIdSuffix: identifierSuffix(avatarId),
       deviceType,
       apiUrl: API_URL,
       hasApiKey: !!API_KEY,
       hasSecretId: !!HEYGEN_ELEVENLABS_SECRET_ID,
-      agentId: ELEVENLABS_AGENT_ID,
+      agentIdSuffix: identifierSuffix(ELEVENLABS_AGENT_ID),
     },
     { route: "/api/start-custom-session" },
   );
@@ -183,9 +187,16 @@ export async function POST(request: Request) {
       },
     };
 
-    logger.debug("[HEYGEN] Request payload", heygenPayload, {
-      route: "/api/start-custom-session",
-    });
+    logger.debug(
+      "[HEYGEN] Request payload prepared",
+      {
+        mode: heygenPayload.mode,
+        avatarIdSuffix: identifierSuffix(avatarId),
+        agentIdSuffix: identifierSuffix(ELEVENLABS_AGENT_ID),
+        dynamicVariableNames: ["consultation_id"],
+      },
+      { route: "/api/start-custom-session" },
+    );
 
     const res = await fetch(`${API_URL}/v1/sessions/token`, {
       method: "POST",
@@ -251,10 +262,9 @@ export async function POST(request: Request) {
         {
           status: res.status,
           statusText: res.statusText,
-          errorMessage,
           errorCode,
-          avatarId,
-          errorDetails,
+          avatarIdSuffix: identifierSuffix(avatarId),
+          errorDetailKeys: Object.keys(errorDetails),
         },
         { route: "/api/start-custom-session" },
       );
@@ -276,7 +286,7 @@ export async function POST(request: Request) {
     logger.info(
       "[HEYGEN] Session created successfully",
       {
-        sessionId: data.data?.session_id,
+        sessionIdSuffix: identifierSuffix(data.data?.session_id),
         hasToken: !!data.data?.session_token,
       },
       {
@@ -354,7 +364,7 @@ export async function POST(request: Request) {
     });
     logger.debug(
       "[DB] Session tracked",
-      { sessionId: session_id },
+      { sessionIdSuffix: identifierSuffix(session_id) },
       {
         route: "/api/start-custom-session",
       },

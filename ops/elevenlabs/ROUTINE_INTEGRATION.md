@@ -1,6 +1,6 @@
 # Clara: transcripción, resumen y rutina estructurada
 
-Estado: implementación local preparada; configuración remota no publicada.
+Estado: integración publicada únicamente en QA y activa para `testers` desde el 15 de septiembre de 2026. Producción no fue modificada.
 
 ## Flujo
 
@@ -10,15 +10,19 @@ Estado: implementación local preparada; configuración remota no publicada.
 4. ElevenLabs envía `post_call_transcription` firmado. La aplicación verifica la firma con el SDK oficial y guarda su transcripción y resumen, sin volver a analizarlos con otro modelo.
 5. La pantalla consulta el resultado mediante un token de navegador separado cuyo hash queda en la base de datos.
 
-## Configuración pendiente y segura
+## Configuración remota aplicada en QA
 
-- Crear un secreto aleatorio para `CLARA_AGENT_TOOL_SECRET` en Vercel Preview.
-- Crear el mismo valor como secreto de workspace de ElevenLabs y reemplazar el marcador de los dos templates por su ID. Nunca guardar el valor en Git.
-- Crear/seleccionar una rama experimental de ElevenLabs, crear ambas herramientas y adjuntarlas sólo a esa rama.
-- Añadir al prompt de la rama las reglas de uso descritas por cada herramienta.
-- Crear el webhook de workspace `post_call_transcription` hacia `https://testers.betaskintech.com/api/webhooks/elevenlabs` y guardar el secreto generado como `ELEVENLABS_WEBHOOK_SECRET` en Vercel Preview.
-- Aplicar el esquema Prisma sin `--accept-data-loss` después de confirmar que la base Neon local corresponde a QA.
-- Ejecutar primero herramientas con respuestas simuladas y luego una conversación real en testers.
+- `CLARA_AGENT_TOOL_SECRET` existe solamente en Vercel Preview y su forma Bearer solamente en el secreto de workspace de ElevenLabs.
+- Las herramientas `buscar_productos_shopify` y `guardar_rutina_clara` están adjuntas solamente a `clara-ai-qa` / `qa-routine-tools-2026-09-14`.
+- La rama QA obliga a buscar antes de recomendar, no inventar productos y guardar una única rutina después de una confirmación explícita en el turno siguiente.
+- `Clara QA post-call` está asociado solamente a esa rama, entrega `post_call_transcription` como JSON, no envía audio y tiene reintentos habilitados.
+- El endpoint de testers valida la firma HMAC con el SDK oficial, acepta únicamente el agente QA y persiste una transcripción normalizada, resumen y métricas permitidas.
+- Vercel Preview contiene las dos conexiones Neon, los secretos del conector QA, la autorización de herramientas y el secreto del webhook. Producción conserva su configuración anterior.
+- El tráfico de `clara-ai-qa` está en 100% para la rama QA. El agente `clara-ai` de Producción conserva Main en 100%.
+
+## Validación pendiente de la persona tester
+
+Falta una llamada real desde el enlace Shopify autenticado para comprobar conjuntamente micrófono, LiveAvatar, ejecución real de herramientas, entrega post-call, persistencia Neon y presentación del resumen/rutina. Las simulaciones del agente y las pruebas de aplicación ya cubren los casos de producto válido, producto inexistente, cierre incompleto, fuera de alcance, confirmación, firma, autorización e idempotencia.
 
 No usar los templates directamente mientras contengan marcadores `<...>`.
 

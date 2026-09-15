@@ -1,6 +1,17 @@
 # Clara ElevenLabs agents-as-code workspace
 
-Initialized with the official ElevenLabs CLI 1.2.0 on 2026-09-11. This directory is intentionally empty: no production agent config has been pulled and no remote change has been published.
+Initialized with the official ElevenLabs CLI 1.2.0 on 2026-09-11. Raw agent configuration is intentionally not committed: prompts, transcripts, secrets and full provider identifiers stay outside Git.
+
+## QA state verified on 2026-09-15
+
+- `clara-ai-qa` is the agent used only by Vercel Preview/testers.
+- Branch `qa-routine-tools-2026-09-14` receives 100% of that QA agent's traffic; its Main and the older experiment receive 0%.
+- The active QA revision has two server tools, no inherited knowledge base and the compact ordered-consultation prompt validated with synthetic tests.
+- `Clara QA post-call` sends JSON transcripts, without audio, to the signed testers endpoint. Delivery retries are enabled.
+- The production `clara-ai` agent remains on Main at 100%; its older experiment remains at 0% and it is not associated with the QA webhook.
+- The public tool and post-call endpoints reject unsigned/unauthenticated requests with `401`.
+
+Rollback is limited to the QA agent: deploy its Main branch at 100%, set `qa-routine-tools-2026-09-14` to 0%, and detach the QA post-call association. Do not merge branches or change the production agent as part of rollback.
 
 ## Security gate before the first pull
 
@@ -45,6 +56,6 @@ To analyze a known conversation without printing its full identifier:
 Keep `$conversationId` in the current shell or a secure local secret store. Do
 not paste it into committed scripts, logs or documentation.
 
-## Current local credential limitation
+## Credential handling
 
-The available environment key can read agents but, on 2026-09-11, lacked `user_read`. Its write capability is not proven. This does not establish the permissions of the separate ElevenLabs secret stored by LiveAvatar.
+The local CLI session can perform the required scoped QA reads and writes. Its credential remains local and must never be copied into commands, Git, logs or documentation. This does not establish or change the permissions of the separate ElevenLabs secret stored by LiveAvatar.

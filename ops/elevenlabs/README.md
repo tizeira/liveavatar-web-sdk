@@ -5,15 +5,15 @@ Initialized with the official ElevenLabs CLI 1.2.0 on 2026-09-11. Raw agent conf
 ## QA state verified on 2026-09-15
 
 - `clara-ai-qa` is the agent used only by Vercel Preview/testers.
-- Branch `qa-recap-routine-fix-2026-09-15` receives 100% of that QA agent's traffic. Its Main, `qa-routine-tools-2026-09-14` and the older experiment receive 0%.
-- The active branch fixes Spanish user-facing summaries, confirmation-plus-farewell routine saves and Shopify-grounded usage claims. Its matching Vercel Preview is deployed at `testers.betaskintech.com`.
+- Branch `qa-memory-products-2026-09-15` receives 100% of that QA agent's traffic. Its Main and all older QA branches receive 0%.
+- The active branch adds sanitized three-consultation memory, moisturizer-aware companion products, consolidated morning/evening steps and Shopify-grounded product cards. Its matching Vercel Preview is deployed at `testers.betaskintech.com`.
 - The three targeted branch tests pass: affirmative closure saves, while rejection and ambiguity do not.
-- The active QA revision has two server tools, no inherited knowledge base and the compact ordered-consultation prompt validated with synthetic tests.
+- The active QA revision has the catalog search tool and an isolated routine-save tool that accepts `customer_has_moisturizer`; no inherited knowledge base is used.
 - `Clara QA post-call` sends JSON transcripts, without audio, to the signed testers endpoint. Delivery retries are enabled.
 - The production `clara-ai` agent remains on Main at 100%; its older experiment remains at 0% and it is not associated with the QA webhook.
 - The public tool and post-call endpoints reject unsigned/unauthenticated requests with `401`.
 
-Rollback is limited to the QA agent: route 100% back to `qa-routine-tools-2026-09-14` and set `qa-recap-routine-fix-2026-09-15` to 0%. Do not merge branches or change the production agent as part of rollback.
+Rollback is limited to the QA agent: route 100% back to `qa-recap-routine-fix-2026-09-15` and set `qa-memory-products-2026-09-15` to 0%, then restore the previous Vercel Preview deployment. Do not merge branches or change the production agent as part of rollback.
 
 ## Security gate before the first pull
 

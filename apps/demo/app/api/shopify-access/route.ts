@@ -123,7 +123,15 @@ export async function POST(request: NextRequest) {
       }
       verifiedOrdersCount = customer.numberOfOrders;
       mode = "legacy_verified";
-    } catch {
+    } catch (error) {
+      logger.warn(
+        "Legacy Shopify purchase verification unavailable",
+        {
+          name: (error as Error).name,
+          message: (error as Error).message,
+        },
+        { route: "/api/shopify-access" },
+      );
       return NextResponse.json(
         { valid: false, error: "Purchase verification unavailable" },
         { status: 503 },
@@ -169,7 +177,15 @@ export async function POST(request: NextRequest) {
       maxAge: CLARA_BUYER_TICKET_TTL_SECONDS,
     });
     return response;
-  } catch {
+  } catch (error) {
+    logger.warn(
+      "Clara buyer ticket issuance unavailable",
+      {
+        name: (error as Error).name,
+        message: (error as Error).message,
+      },
+      { route: "/api/shopify-access" },
+    );
     return NextResponse.json(
       { valid: false, error: "Access service unavailable" },
       { status: 503 },

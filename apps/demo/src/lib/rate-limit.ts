@@ -139,10 +139,11 @@ export async function rateLimitByEndpoint(
 
   // Configuraciones por endpoint
   const configs: Record<string, RateLimitConfig> = {
-    "start-custom-session": { max: 5, windowSec: 15 * 60 }, // 5 per 15min
+    "start-custom-session": { max: 30, windowSec: 5 * 60 }, // broad IP anti-automation only
     "elevenlabs-conversation": { max: 10, windowSec: 60 * 60 }, // 10 per hour
     "verify-customer": { max: 10, windowSec: 5 * 60 }, // 10 per 5min
     "shopify-customer": { max: 10, windowSec: 5 * 60 }, // 10 per 5min
+    "shopify-access": { max: 20, windowSec: 5 * 60 }, // broad anti-automation pre-limit
     "beta-access": { max: 5, windowSec: 15 * 60 }, // 5 attempts per 15min (anti-brute-force)
   };
 

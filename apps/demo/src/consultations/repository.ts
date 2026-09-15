@@ -183,6 +183,15 @@ export async function getClaraConsultation(consultationId: string) {
   };
 }
 
+export async function getClaraConsultationAccessContext(
+  consultationId: string,
+) {
+  return prisma.claraConsultation.findUnique({
+    where: { id: consultationId },
+    select: { accessTokenHash: true, shopifyCustomerKey: true },
+  });
+}
+
 export async function getLatestClaraConsultation(shopifyCustomerKey: string) {
   const consultation = await prisma.claraConsultation.findFirst({
     where: {

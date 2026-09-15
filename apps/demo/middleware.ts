@@ -22,6 +22,7 @@ export default auth(async (req) => {
     const betaExemptPaths = [
       "/access",
       "/api/access",
+      "/api/shopify-access",
       // Machine-to-machine endpoints enforce their own HMAC/Bearer secrets.
       // They cannot present the browser-only beta access cookie.
       "/api/agent-tools",
@@ -46,7 +47,7 @@ export default auth(async (req) => {
       if (!cookieValid) {
         const accessUrl = new URL("/access", req.url);
         // Preserve original destination so we can redirect back after gate
-        if (pathname !== "/") {
+        if (pathname !== "/" || req.nextUrl.search) {
           accessUrl.searchParams.set("redirect", pathname + req.nextUrl.search);
         }
         return NextResponse.redirect(accessUrl);
@@ -116,6 +117,13 @@ export default auth(async (req) => {
   // Allow home page when coming from Shopify iframe with token
   // The page will validate the token client-side via /api/shopify-customer
   if (pathname === "/" && searchParams.has("shopify_token")) {
+    return NextResponse.next();
+  }
+
+  // Presence only opens the UI shell; the page and paid-session endpoint both
+  // validate the opaque ticket against KV before returning private data or
+  // creating a LiveAvatar session.
+  if (pathname === "/" && req.cookies.has("clara_buyer_access")) {
     return NextResponse.next();
   }
 

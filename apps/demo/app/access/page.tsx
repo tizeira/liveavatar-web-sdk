@@ -17,7 +17,11 @@ import { Lock, ShieldCheck } from "lucide-react";
 
 function AccessForm() {
   const searchParams = useSearchParams();
-  const redirectTo = searchParams.get("redirect") || "/";
+  const requestedRedirect = searchParams.get("redirect") || "/";
+  const redirectTo =
+    requestedRedirect.startsWith("/") && !requestedRedirect.startsWith("//")
+      ? requestedRedirect
+      : "/";
 
   const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);

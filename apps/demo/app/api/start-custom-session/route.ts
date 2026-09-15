@@ -17,11 +17,6 @@ import {
 } from "../secrets";
 import { NextRequest } from "next/server";
 import { rateLimitByEndpoint } from "@/src/lib/rate-limit";
-import {
-  verifyCustomerToken,
-  isValidCustomerId,
-  cleanCustomerId,
-} from "@/src/shopify";
 import { logger } from "@/src/lib/logger/secure-logger";
 import { randomBytes, randomUUID } from "node:crypto";
 import {
@@ -29,20 +24,24 @@ import {
   getRecentClaraConversationMemory,
 } from "@/src/consultations/repository";
 import type { ClaraConversationMemory } from "@/src/consultations/types";
+import { hashConsultationAccessToken } from "@/src/consultations/security";
 import {
-  deriveShopifyCustomerKey,
-  hashConsultationAccessToken,
-} from "@/src/consultations/security";
+  CLARA_BUYER_COOKIE_NAME,
+  deriveAuthenticatedTesterKey,
+  readClaraBuyerTicket,
+  releaseClaraBuyerSession,
+  reserveClaraBuyerSession,
+} from "@/src/lib/clara-buyer-access";
 
 function identifierSuffix(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value.slice(-6) : null;
 }
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   // === RATE LIMIT CHECK ===
   // Cast to NextRequest for rate limiting (headers are compatible)
   const limitResult = await rateLimitByEndpoint(
-    request as NextRequest,
+    request,
     "start-custom-session",
   );
 
@@ -70,55 +69,40 @@ export async function POST(request: Request) {
 
   // === PARSE REQUEST BODY ===
   let deviceType: "mobile" | "desktop" = "desktop";
-  let shopifyCustomerId: string | undefined;
-  let shopifyToken: string | undefined;
 
   try {
     const body = await request.json();
     if (body.deviceType === "mobile") {
       deviceType = "mobile";
     }
-    // Optional Shopify credentials for iframe users
-    shopifyCustomerId = body.customer_id;
-    shopifyToken = body.shopify_token;
   } catch {
     // No body or invalid JSON, use default (desktop)
   }
 
   // === AUTH GUARD ===
-  // Allow either:
-  // 1. NextAuth session (Google/Credentials login)
-  // 2. Valid Shopify HMAC token (iframe users)
+  // Paid browser sessions use an opaque HttpOnly ticket issued only after a
+  // purchase-aware Shopify verification. NextAuth remains a QA tester path.
   const session = await auth();
-  let isShopifyUser = false;
-
-  // Validate Shopify credentials if provided
-  if (shopifyCustomerId && shopifyToken) {
-    const cleanId = cleanCustomerId(shopifyCustomerId);
-    if (
-      isValidCustomerId(cleanId) &&
-      verifyCustomerToken(shopifyToken, cleanId)
-    ) {
-      isShopifyUser = true;
-      logger.info(
-        "Valid Shopify HMAC",
-        { authenticatedBy: "shopify_hmac" },
-        { route: "/api/start-custom-session" },
-      );
-    } else {
-      logger.warn(
-        "Invalid Shopify HMAC attempt",
-        { customerIdPresent: Boolean(cleanId) },
-        { route: "/api/start-custom-session" },
-      );
-    }
+  let buyerTicket = null;
+  try {
+    buyerTicket = await readClaraBuyerTicket(
+      request.cookies.get(CLARA_BUYER_COOKIE_NAME)?.value,
+    );
+  } catch {
+    return new Response(
+      JSON.stringify({
+        error: "Access service unavailable",
+        code: "CLARA_LIMITER_UNAVAILABLE",
+      }),
+      { status: 503, headers: { "Content-Type": "application/json" } },
+    );
   }
 
-  if (!session?.user && !isShopifyUser) {
+  if (!session?.user && !buyerTicket) {
     return new Response(
       JSON.stringify({
         error: "Unauthorized",
-        message: "Valid session or Shopify credentials required",
+        message: "Valid buyer access or tester session required",
       }),
       {
         status: 401,
@@ -132,6 +116,25 @@ export async function POST(request: Request) {
   let conversationMemory: ClaraConversationMemory = [];
   const consultationId = randomUUID();
   const consultationAccessToken = randomBytes(32).toString("base64url");
+  let shopifyCustomerKey = buyerTicket?.buyerKey;
+  let rateLimitBuyerKey = shopifyCustomerKey;
+  if (!rateLimitBuyerKey && session?.user?.email && SHOPIFY_HMAC_SECRET) {
+    rateLimitBuyerKey = deriveAuthenticatedTesterKey(
+      session.user.email,
+      SHOPIFY_HMAC_SECRET,
+    );
+    shopifyCustomerKey = rateLimitBuyerKey;
+  }
+
+  if (!rateLimitBuyerKey) {
+    return new Response(
+      JSON.stringify({
+        error: "Unauthorized",
+        message: "A buyer identity is required",
+      }),
+      { status: 401, headers: { "Content-Type": "application/json" } },
+    );
+  }
 
   // Select avatar based on device type
   const avatarId =
@@ -163,6 +166,42 @@ export async function POST(request: Request) {
       { status: 500, headers: { "Content-Type": "application/json" } },
     );
   }
+
+  const reservation = await reserveClaraBuyerSession(
+    rateLimitBuyerKey,
+    consultationId,
+  );
+  if (!reservation.ok) {
+    const status =
+      reservation.reason === "active_session"
+        ? 409
+        : reservation.reason === "start_limit"
+          ? 429
+          : 503;
+    const message =
+      reservation.reason === "active_session"
+        ? "Ya hay una conversación de Clara activa para este comprador."
+        : reservation.reason === "start_limit"
+          ? "Alcanzaste el máximo de tres conversaciones por hora."
+          : "El control de acceso está temporalmente fuera de servicio.";
+    return new Response(
+      JSON.stringify({
+        error: message,
+        code: `CLARA_${reservation.reason.toUpperCase()}`,
+        retryAfter: reservation.retryAfter,
+      }),
+      {
+        status,
+        headers: {
+          "Content-Type": "application/json",
+          "Retry-After": String(reservation.retryAfter),
+        },
+      },
+    );
+  }
+
+  const releaseReservation = () =>
+    releaseClaraBuyerSession(rateLimitBuyerKey, consultationId);
 
   logger.info(
     "[HEYGEN] Starting LITE+ElevenLabs Plugin session",
@@ -274,6 +313,7 @@ export async function POST(request: Request) {
         { route: "/api/start-custom-session" },
       );
 
+      await releaseReservation();
       return new Response(
         JSON.stringify({
           error: errorMessage,
@@ -319,6 +359,7 @@ export async function POST(request: Request) {
       { route: "/api/start-custom-session" },
     );
 
+    await releaseReservation();
     return new Response(
       JSON.stringify({
         error: err.message,
@@ -338,6 +379,7 @@ export async function POST(request: Request) {
     logger.error("[HEYGEN] Empty session token received", null, {
       route: "/api/start-custom-session",
     });
+    await releaseReservation();
     return new Response(
       JSON.stringify({
         error: "Failed to retrieve session token",
@@ -350,14 +392,6 @@ export async function POST(request: Request) {
       },
     );
   }
-
-  const shopifyCustomerKey =
-    isShopifyUser && SHOPIFY_HMAC_SECRET
-      ? deriveShopifyCustomerKey(
-          cleanCustomerId(shopifyCustomerId || ""),
-          SHOPIFY_HMAC_SECRET,
-        )
-      : undefined;
 
   if (shopifyCustomerKey) {
     try {
@@ -432,6 +466,9 @@ export async function POST(request: Request) {
       status: 200,
       headers: {
         "Content-Type": "application/json",
+        "X-RateLimit-Limit": "3",
+        "X-RateLimit-Remaining": String(reservation.remaining),
+        "X-RateLimit-Reset": new Date(reservation.resetAt).toISOString(),
       },
     },
   );

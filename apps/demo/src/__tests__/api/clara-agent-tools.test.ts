@@ -4,13 +4,13 @@ import { NextRequest } from "next/server";
 process.env.CLARA_AGENT_TOOL_SECRET = "test-tool-secret";
 
 const mockSearchProducts = vi.fn();
-const mockFetchProduct = vi.fn();
+const mockFetchProducts = vi.fn();
 const mockSaveRoutine = vi.fn();
 
 vi.mock("@/src/shopify/client", () => ({
   searchProductsForClara: (...args: unknown[]) => mockSearchProducts(...args),
-  fetchProductForClaraByHandle: (...args: unknown[]) =>
-    mockFetchProduct(...args),
+  fetchProductsForClaraByHandles: (...args: unknown[]) =>
+    mockFetchProducts(...args),
 }));
 
 vi.mock("@/src/consultations/repository", () => ({
@@ -36,7 +36,7 @@ function request(path: string, body: unknown, authorized = true) {
 beforeEach(() => {
   vi.clearAllMocks();
   mockSearchProducts.mockResolvedValue([]);
-  mockFetchProduct.mockResolvedValue(null);
+  mockFetchProducts.mockResolvedValue(new Map());
   mockSaveRoutine.mockResolvedValue({});
 });
 
@@ -104,7 +104,7 @@ describe("Clara routine tool", () => {
   });
 
   it("replaces a handle with canonical Shopify product data", async () => {
-    mockFetchProduct.mockResolvedValue({
+    const product = {
       id: "gid://shopify/Product/1",
       title: "Booster 02",
       handle: "booster-02",
@@ -117,7 +117,8 @@ describe("Clara routine tool", () => {
       compareAtPrice: null,
       companionCondition: null,
       companionProducts: [],
-    });
+    };
+    mockFetchProducts.mockResolvedValue(new Map([[product.handle, product]]));
 
     const response = await routineRoute.POST(
       request("/api/agent-tools/save-routine", {
@@ -140,7 +141,7 @@ describe("Clara routine tool", () => {
   });
 
   it("requires moisturizer status before saving a conditional companion", async () => {
-    mockFetchProduct.mockResolvedValue({
+    const product = {
       id: "gid://shopify/Product/1",
       title: "Beta Hacker",
       handle: "beta-hacker",
@@ -165,7 +166,8 @@ describe("Clara routine tool", () => {
           compareAtPrice: null,
         },
       ],
-    });
+    };
+    mockFetchProducts.mockResolvedValue(new Map([[product.handle, product]]));
 
     const response = await routineRoute.POST(
       request("/api/agent-tools/save-routine", {
@@ -214,7 +216,7 @@ describe("Clara routine tool", () => {
         },
       ],
     };
-    mockFetchProduct.mockResolvedValue(hacker);
+    mockFetchProducts.mockResolvedValue(new Map([[hacker.handle, hacker]]));
 
     const response = await routineRoute.POST(
       request("/api/agent-tools/save-routine", {
@@ -262,9 +264,10 @@ describe("Clara routine tool", () => {
       companionCondition: "if_no_moisturizer",
       companionProducts: [companion],
     };
-    mockFetchProduct.mockImplementation((handle: string) =>
-      Promise.resolve(handle === "beta-hacker" ? hacker : companion),
-    );
+    const verifiedProducts = new Map<string, unknown>();
+    verifiedProducts.set(hacker.handle, hacker);
+    verifiedProducts.set(companion.handle, companion);
+    mockFetchProducts.mockResolvedValue(verifiedProducts);
 
     const repeated = {
       instruction: "Aplicar sobre la piel limpia",

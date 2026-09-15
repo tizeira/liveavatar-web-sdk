@@ -1524,11 +1524,6 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
     setConversationMemory([]);
 
     try {
-      // Preserve Shopify authentication when the customer entered through a
-      // signed storefront link. The API validates the HMAC again before it
-      // creates a paid LiveAvatar session.
-      const shopifyParams = new URLSearchParams(window.location.search);
-
       // Use LITE mode with ElevenLabs Plugin (HeyGen handles STT/LLM/TTS server-side)
       const res = await fetch("/api/start-custom-session", {
         method: "POST",
@@ -1537,26 +1532,39 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
         },
         body: JSON.stringify({
           deviceType: isDesktop ? "desktop" : "mobile",
-          customer_id: shopifyParams.get("customer_id") || undefined,
-          shopify_token: shopifyParams.get("shopify_token") || undefined,
         }),
       });
 
       if (!res.ok) {
         const errorData = await res.json();
 
-        // Handle rate limit (429) specifically
-        if (res.status === 429) {
+        // Buyer-specific start quota and active-session lock.
+        if (res.status === 429 || res.status === 409) {
           const retryAfter = errorData.retryAfter || 60;
           setRateLimitCountdown(retryAfter);
 
-          // Show toast notification
-          toast.error("Límite de sesiones alcanzado", {
-            description: `Has iniciado muchas sesiones recientemente. Por favor espera ${retryAfter} segundos antes de intentar nuevamente.`,
-            duration: 5000,
-          });
+          toast.error(
+            res.status === 409
+              ? "Ya hay una conversación activa"
+              : "Límite de conversaciones alcanzado",
+            {
+              description:
+                res.status === 409
+                  ? "Finalizá la conversación abierta o esperá unos minutos para volver a intentar."
+                  : `Podés iniciar hasta tres conversaciones por hora. Volvé a intentar en ${Math.ceil(retryAfter / 60)} min.`,
+              duration: 5000,
+            },
+          );
 
           return; // Exit early, don't throw error
+        }
+
+        if (res.status === 503) {
+          toast.error("Acceso temporalmente no disponible", {
+            description:
+              "No iniciamos una sesión paga porque no pudimos validar el límite. Probá nuevamente en unos segundos.",
+          });
+          return;
         }
 
         throw new Error(errorData.error || "Failed to start session");
@@ -1606,7 +1614,19 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
     sessionStartedAtRef.current = null;
     setSessionToken(null);
     setRecapView("preparing");
-  }, []);
+    if (consultationCredentials) {
+      void fetch(
+        `/api/consultations/${encodeURIComponent(consultationCredentials.id)}/release`,
+        {
+          method: "POST",
+          headers: {
+            "x-consultation-token": consultationCredentials.accessToken,
+          },
+          keepalive: true,
+        },
+      );
+    }
+  }, [consultationCredentials]);
 
   useEffect(() => {
     if (recapView !== "preparing") return;

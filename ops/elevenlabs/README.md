@@ -15,6 +15,14 @@ Initialized with the official ElevenLabs CLI 1.2.0 on 2026-09-11. Raw agent conf
 
 Rollback is limited to the QA agent: route 100% back to `qa-recap-routine-fix-2026-09-15` and set `qa-memory-products-2026-09-15` to 0%, then restore the previous Vercel Preview deployment. Do not merge branches or change the production agent as part of rollback.
 
+## Rate/tools and A/B checkpoint — 2026-09-15
+
+- `qa-memory-products-2026-09-15` remains the only live QA branch at 100%.
+- `qa-intelligence-terra-2026-09-15` changes only the LLM to `gpt-5.6-terra` with low reasoning; it remains at 0%.
+- `qa-voice-v3-2026-09-15` changes only TTS to `eleven_v3_conversational`; it remains at 0%.
+- Five identical simulations produced 3/5 passes on the baseline, 2/5 on the voice candidate and 1/5 on the intelligence candidate. These runs are a safety gate, not a production-quality benchmark; neither candidate may receive traffic until the failing tool-call cases are corrected and rerun.
+- The application-side candidate adds a three-starts-per-hour buyer quota, one active conversation per buyer, a ten-minute provider cap, opaque browser tickets and a single batched Shopify verification during routine save.
+
 ## Security gate before the first pull
 
 An agent config round-trips raw provider JSON and can contain the full system prompt, workspace member details, resource IDs, allowlists, tools, knowledge-base metadata and privacy settings. Confirm that this Git repository and its collaborators are approved to hold that information before downloading it here.

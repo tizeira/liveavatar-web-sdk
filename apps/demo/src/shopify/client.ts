@@ -12,6 +12,7 @@ import {
   CUSTOMER_BY_ID_QUERY,
   PRODUCTS_FOR_CLARA_QUERY,
   PRODUCT_FOR_CLARA_BY_HANDLE_QUERY,
+  PRODUCTS_FOR_CLARA_BY_HANDLES_QUERY,
 } from "./queries";
 import {
   ShopifyCustomer,
@@ -246,6 +247,38 @@ export async function fetchProductForClaraByHandle(
     data.productByHandle,
     data.shop.currencyCode,
     data.shop.primaryDomain.url,
+  );
+}
+
+export async function fetchProductsForClaraByHandles(
+  handles: string[],
+): Promise<Map<string, ClaraCatalogProduct>> {
+  const uniqueHandles = [
+    ...new Set(handles.map((handle) => handle.trim().toLowerCase())),
+  ].filter((handle) => /^[a-z0-9][a-z0-9-]{0,254}$/.test(handle));
+  if (!uniqueHandles.length) return new Map();
+
+  const data = await shopifyGraphQL<{
+    shop: { currencyCode: string; primaryDomain: { url: string } };
+    products: { nodes: ClaraProductNode[] };
+  }>(PRODUCTS_FOR_CLARA_BY_HANDLES_QUERY, {
+    first: Math.min(uniqueHandles.length, 20),
+    query: uniqueHandles.map((handle) => `handle:${handle}`).join(" OR "),
+  });
+
+  const requested = new Set(uniqueHandles);
+  return new Map(
+    data.products.nodes
+      .filter((node) => node.status === "ACTIVE" && requested.has(node.handle))
+      .map((node) =>
+        toClaraCatalogProduct(
+          node,
+          data.shop.currencyCode,
+          data.shop.primaryDomain.url,
+        ),
+      )
+      .filter((product) => product.availableForSale && product.url)
+      .map((product) => [product.handle, product]),
   );
 }
 

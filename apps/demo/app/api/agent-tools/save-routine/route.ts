@@ -3,9 +3,11 @@ import { CLARA_AGENT_TOOL_SECRET } from "@/app/api/secrets";
 import { hasValidAgentToolSecret } from "@/src/consultations/security";
 import { saveClaraRoutine } from "@/src/consultations/repository";
 import type { ClaraRoutine, ClaraRoutineStep } from "@/src/consultations/types";
-import { fetchProductForClaraByHandle } from "@/src/shopify/client";
+import { fetchProductsForClaraByHandles } from "@/src/shopify/client";
 import { sanitizeUserFacingSummary } from "@/src/consultations/privacy";
 import { consolidateRoutineSteps } from "@/src/consultations/routine";
+import { logger } from "@/src/lib/logger/secure-logger";
+import type { ClaraCatalogProduct } from "@/src/shopify/types";
 
 const validMoments = new Set([
   "morning",
@@ -27,6 +29,7 @@ function cleanStringList(value: unknown, maxItems: number): string[] {
 }
 
 export async function POST(request: NextRequest) {
+  const startedAt = performance.now();
   if (
     !hasValidAgentToolSecret(
       request.headers.get("authorization"),
@@ -63,6 +66,25 @@ export async function POST(request: NextRequest) {
 
   const steps: ClaraRoutineStep[] = [];
   const rejectedProductHandles: string[] = [];
+  const requestedHandles = rawSteps.flatMap((rawStep) => {
+    if (!rawStep || typeof rawStep !== "object") return [];
+    const handle = cleanText(
+      (rawStep as Record<string, unknown>).product_handle,
+      255,
+    ).toLowerCase();
+    return handle ? [handle] : [];
+  });
+  const shopifyStartedAt = performance.now();
+  let verifiedProducts: Map<string, ClaraCatalogProduct>;
+  try {
+    verifiedProducts = await fetchProductsForClaraByHandles(requestedHandles);
+  } catch {
+    return NextResponse.json(
+      { error: "Shopify catalog is temporarily unavailable" },
+      { status: 502 },
+    );
+  }
+  const shopifyMs = Math.round(performance.now() - shopifyStartedAt);
 
   for (const [index, rawStep] of rawSteps.entries()) {
     if (!rawStep || typeof rawStep !== "object") continue;
@@ -75,7 +97,7 @@ export async function POST(request: NextRequest) {
 
     let product = null;
     if (productHandle) {
-      product = await fetchProductForClaraByHandle(productHandle);
+      product = verifiedProducts.get(productHandle) || null;
       if (!product || !product.availableForSale || !product.url) {
         rejectedProductHandles.push(productHandle);
         product = null;
@@ -156,7 +178,20 @@ export async function POST(request: NextRequest) {
   };
 
   try {
+    const neonStartedAt = performance.now();
     await saveClaraRoutine(consultationId, summary, routine);
+    const neonMs = Math.round(performance.now() - neonStartedAt);
+    logger.info(
+      "Clara routine tool completed",
+      {
+        tool_total_ms: Math.round(performance.now() - startedAt),
+        shopify_ms: shopifyMs,
+        neon_ms: neonMs,
+        result_count: routine.steps.length,
+        requested_product_count: new Set(requestedHandles).size,
+      },
+      { route: "/api/agent-tools/save-routine" },
+    );
     return NextResponse.json({
       saved: true,
       routine,

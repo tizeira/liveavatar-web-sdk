@@ -2,8 +2,32 @@ import { NextRequest, NextResponse } from "next/server";
 import { CLARA_AGENT_TOOL_SECRET } from "@/app/api/secrets";
 import { hasValidAgentToolSecret } from "@/src/consultations/security";
 import { searchProductsForClara } from "@/src/shopify/client";
+import { createHash } from "node:crypto";
+import { kv } from "@vercel/kv";
+import type { ClaraCatalogProduct } from "@/src/shopify/types";
+import { logger } from "@/src/lib/logger/secure-logger";
+
+const CATALOG_CACHE_SECONDS = 4 * 60;
+
+function hasKvConfiguration() {
+  return Boolean(
+    (process.env.KV_REST_API_URL || process.env.KV_URL) &&
+      process.env.KV_REST_API_TOKEN,
+  );
+}
+
+function compactProduct(product: ClaraCatalogProduct) {
+  return {
+    ...product,
+    description:
+      typeof product.description === "string"
+        ? product.description.slice(0, 480)
+        : "",
+  };
+}
 
 export async function POST(request: NextRequest) {
+  const startedAt = performance.now();
   if (
     !hasValidAgentToolSecret(
       request.headers.get("authorization"),
@@ -32,11 +56,54 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const products = await searchProductsForClara(query);
+    const normalizedQuery = query
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/\s+/g, " ");
+    const cacheKey = `clara:catalog-search:${createHash("sha256")
+      .update(normalizedQuery)
+      .digest("hex")}`;
+    let products: ClaraCatalogProduct[] | null = null;
+    let cacheHit = false;
+    if (hasKvConfiguration()) {
+      try {
+        products = await kv.get<ClaraCatalogProduct[]>(cacheKey);
+        cacheHit = Array.isArray(products);
+      } catch {
+        products = null;
+      }
+    }
+
+    const shopifyStartedAt = performance.now();
+    if (!products) {
+      products = await searchProductsForClara(query);
+      if (hasKvConfiguration()) {
+        try {
+          await kv.set(cacheKey, products, { ex: CATALOG_CACHE_SECONDS });
+        } catch {
+          // Cache is an optimization; Shopify remains the source of truth.
+        }
+      }
+    }
+    const shopifyMs = cacheHit
+      ? 0
+      : Math.round(performance.now() - shopifyStartedAt);
+    const compactProducts = products.map(compactProduct);
+    logger.info(
+      "Clara Shopify search tool completed",
+      {
+        tool_total_ms: Math.round(performance.now() - startedAt),
+        shopify_ms: shopifyMs,
+        cache_hit: cacheHit,
+        result_count: compactProducts.length,
+      },
+      { route: "/api/agent-tools/shopify-products" },
+    );
     return NextResponse.json({
-      products,
+      products: compactProducts,
       instruction:
-        products.length > 0
+        compactProducts.length > 0
           ? "Recommend only products returned here and preserve each exact handle and URL."
           : "No matching published product was found. Do not invent a product or URL.",
     });

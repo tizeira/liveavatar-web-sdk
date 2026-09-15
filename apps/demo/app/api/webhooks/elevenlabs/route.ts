@@ -8,6 +8,7 @@ import {
 import { completeClaraConsultation } from "@/src/consultations/repository";
 import type { ClaraTranscriptTurn } from "@/src/consultations/types";
 import { sanitizeUserFacingSummary } from "@/src/consultations/privacy";
+import { releaseClaraBuyerSession } from "@/src/lib/clara-buyer-access";
 
 const elevenlabs = new ElevenLabsClient({ apiKey: ELEVENLABS_API_KEY });
 
@@ -140,13 +141,17 @@ export async function POST(request: NextRequest) {
       : {};
 
   try {
-    await completeClaraConsultation({
+    const completed = await completeClaraConsultation({
       consultationId,
       elevenLabsConversationId: conversationId,
       transcript: normalizeTranscript(data.transcript),
       analysisMetrics: allowlistedAnalysisMetrics(analysis, metadata),
       summary,
     });
+    await releaseClaraBuyerSession(
+      completed.shopifyCustomerKey,
+      consultationId,
+    );
   } catch {
     // ElevenLabs retries 5xx post-call deliveries. Never acknowledge a
     // persistence failure as successful or log the transcript payload.

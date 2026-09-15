@@ -98,36 +98,27 @@
     if customer and hmac_secret != blank
       assign customer_id = customer.id
       assign first_name = customer.first_name
-      assign last_name = customer.last_name
-      assign customer_email = customer.email
       assign orders_count = customer.orders_count
+      assign issued_at = 'now' | date: '%s'
+      assign encoded_first_name = first_name | url_encode
 
       # ═══════════════════════════════════════════════════════════════
       # PASO 3: Generar token HMAC (firma criptográfica)
       # ═══════════════════════════════════════════════════════════════
-      assign shopify_token = customer_id | hmac_sha256: hmac_secret
+      assign signed_payload = 'v=2&customer_id=' | append: customer_id | append: '&orders_count=' | append: orders_count | append: '&issued_at=' | append: issued_at
+      assign shopify_token = signed_payload | hmac_sha256: hmac_secret
 
       # ═══════════════════════════════════════════════════════════════
       # PASO 4: Construir URL con datos del cliente
       # ═══════════════════════════════════════════════════════════════
       assign widget_url = clara_domain
-      assign widget_url = widget_url | append: '?customer_id=' | append: customer_id
+      assign widget_url = widget_url | append: '?clara_v=2&customer_id=' | append: customer_id
+      assign widget_url = widget_url | append: '&orders_count=' | append: orders_count
+      assign widget_url = widget_url | append: '&issued_at=' | append: issued_at
       assign widget_url = widget_url | append: '&shopify_token=' | append: shopify_token
 
       if first_name != blank
-        assign widget_url = widget_url | append: '&first_name=' | append: first_name | url_encode
-      endif
-
-      if last_name != blank
-        assign widget_url = widget_url | append: '&last_name=' | append: last_name | url_encode
-      endif
-
-      if customer_email != blank
-        assign widget_url = widget_url | append: '&email=' | append: customer_email | url_encode
-      endif
-
-      if orders_count
-        assign widget_url = widget_url | append: '&orders_count=' | append: orders_count
+        assign widget_url = widget_url | append: '&first_name=' | append: encoded_first_name
       endif
 
     else

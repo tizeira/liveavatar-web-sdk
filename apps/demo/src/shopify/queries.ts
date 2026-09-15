@@ -107,6 +107,18 @@ export const CUSTOMER_BY_ID_QUERY = `
 `;
 
 /**
+ * Minimal legacy-link entitlement check. It deliberately avoids customer PII
+ * and order contents; only purchase count is required at this boundary.
+ */
+export const CUSTOMER_PURCHASE_COUNT_BY_ID_QUERY = `
+  query customerPurchaseCountById($id: ID!) {
+    customer(id: $id) {
+      numberOfOrders
+    }
+  }
+`;
+
+/**
  * Simple query to check if customer exists and has orders
  * Lighter query for quick verification
  */

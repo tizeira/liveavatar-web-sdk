@@ -10,6 +10,7 @@ import {
 import {
   CUSTOMER_BY_EMAIL_QUERY,
   CUSTOMER_BY_ID_QUERY,
+  CUSTOMER_PURCHASE_COUNT_BY_ID_QUERY,
   PRODUCTS_FOR_CLARA_QUERY,
   PRODUCT_FOR_CLARA_BY_HANDLE_QUERY,
   PRODUCTS_FOR_CLARA_BY_HANDLES_QUERY,
@@ -384,6 +385,18 @@ export async function fetchCustomerById(
     console.error("Error fetching customer by ID:", error);
     throw error;
   }
+}
+
+export async function fetchCustomerPurchaseCountById(
+  customerId: string,
+): Promise<number | null> {
+  const gid = customerId.startsWith("gid://")
+    ? customerId
+    : `gid://shopify/Customer/${customerId}`;
+  const data = await shopifyGraphQL<{
+    customer: { numberOfOrders: number } | null;
+  }>(CUSTOMER_PURCHASE_COUNT_BY_ID_QUERY, { id: gid });
+  return data.customer?.numberOfOrders ?? null;
 }
 
 /**

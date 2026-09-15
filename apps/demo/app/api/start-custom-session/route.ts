@@ -19,17 +19,15 @@ import { NextRequest } from "next/server";
 import { rateLimitByEndpoint } from "@/src/lib/rate-limit";
 import { logger } from "@/src/lib/logger/secure-logger";
 import { randomBytes, randomUUID } from "node:crypto";
-import {
-  createClaraConsultation,
-  getRecentClaraConversationMemory,
-} from "@/src/consultations/repository";
+import { getRecentClaraConversationMemory } from "@/src/consultations/repository";
 import type { ClaraConversationMemory } from "@/src/consultations/types";
 import { hashConsultationAccessToken } from "@/src/consultations/security";
 import {
+  attachClaraLiveAvatarSession,
+  cancelClaraBuyerSession,
   CLARA_BUYER_COOKIE_NAME,
   deriveAuthenticatedTesterKey,
   readClaraBuyerTicket,
-  releaseClaraBuyerSession,
   reserveClaraBuyerSession,
 } from "@/src/lib/clara-buyer-access";
 
@@ -167,10 +165,11 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const reservation = await reserveClaraBuyerSession(
-    rateLimitBuyerKey,
+  const reservation = await reserveClaraBuyerSession({
+    buyerKey: rateLimitBuyerKey,
     consultationId,
-  );
+    accessTokenHash: hashConsultationAccessToken(consultationAccessToken),
+  });
   if (!reservation.ok) {
     const status =
       reservation.reason === "active_session"
@@ -200,8 +199,8 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const releaseReservation = () =>
-    releaseClaraBuyerSession(rateLimitBuyerKey, consultationId);
+  const cancelReservation = () =>
+    cancelClaraBuyerSession(rateLimitBuyerKey, consultationId);
 
   logger.info(
     "[HEYGEN] Starting LITE+ElevenLabs Plugin session",
@@ -313,7 +312,7 @@ export async function POST(request: NextRequest) {
         { route: "/api/start-custom-session" },
       );
 
-      await releaseReservation();
+      await cancelReservation();
       return new Response(
         JSON.stringify({
           error: errorMessage,
@@ -359,7 +358,7 @@ export async function POST(request: NextRequest) {
       { route: "/api/start-custom-session" },
     );
 
-    await releaseReservation();
+    await cancelReservation();
     return new Response(
       JSON.stringify({
         error: err.message,
@@ -379,7 +378,7 @@ export async function POST(request: NextRequest) {
     logger.error("[HEYGEN] Empty session token received", null, {
       route: "/api/start-custom-session",
     });
-    await releaseReservation();
+    await cancelReservation();
     return new Response(
       JSON.stringify({
         error: "Failed to retrieve session token",
@@ -409,15 +408,12 @@ export async function POST(request: NextRequest) {
   }
 
   // === PRIVACY-MINIMIZED CONSULTATION STORAGE ===
-  // Voice remains available if storage is temporarily unavailable.
+  // The buyer reservation already created the durable consultation atomically.
+  // Attaching the provider session is useful for operations, but correlation
+  // still works through consultation_id if this secondary update fails.
   let consultationPersistenceAvailable = true;
   try {
-    await createClaraConsultation({
-      id: consultationId,
-      accessTokenHash: hashConsultationAccessToken(consultationAccessToken),
-      liveAvatarSessionId: session_id,
-      shopifyCustomerKey,
-    });
+    await attachClaraLiveAvatarSession(consultationId, session_id);
     logger.debug(
       "[DB] Session tracked",
       { sessionIdSuffix: identifierSuffix(session_id) },

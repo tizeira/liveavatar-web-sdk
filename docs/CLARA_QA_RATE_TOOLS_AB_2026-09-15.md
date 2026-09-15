@@ -9,16 +9,16 @@ This checkpoint is QA-only. It does not change Vercel Production, the production
 ## Buyer access and limits
 
 - A fresh Shopify link signs `v`, `customer_id`, `orders_count` and `issued_at` together and expires after five minutes.
-- The application exchanges that link for a random HttpOnly, Secure, SameSite=Lax ticket stored in Vercel KV, then removes all query parameters from the visible URL.
-- The stored ticket contains only a derived customer key and the minimal greeting context. It does not store the Shopify customer ID, email, surname, HMAC token or signed URL.
+- The application exchanges that link for an authenticated-encrypted HttpOnly, Secure, SameSite=Lax ticket, then removes all query parameters from the visible URL.
+- The short-lived ticket contains only a derived customer key and the minimal greeting context. It does not contain the Shopify customer ID, email, surname, HMAC token or signed URL.
 - The legacy customer-ID-only signature remains a transitional QA input, but purchase count is re-read from Shopify; the unsigned URL count is never trusted.
-- Paid session creation fails closed if KV is unavailable.
+- Paid session creation fails closed if Neon cannot enforce the buyer limit.
 - Each derived buyer identity is limited atomically to one active conversation and three starts per rolling hour. The active lock expires after 12 minutes and is released on browser stop, post-call completion or provider startup failure.
 - ElevenLabs retains the existing 600-second maximum conversation duration.
 
 ## Tool latency
 
-- Product search keeps a four-minute public catalog cache keyed by a hash of the normalized query.
+- Product search keeps a four-minute, per-instance public catalog cache keyed by a hash of the normalized query. Cache failure never adds a network timeout.
 - Routine save deduplicates handles and verifies all requested products in one Shopify GraphQL request instead of one request per step.
 - Search and save log only allowlisted timing/count fields: total, Shopify, Neon, cache hit and result count.
 - Shopify remains the source of truth; cache failure is non-blocking and every saved product is freshly validated.

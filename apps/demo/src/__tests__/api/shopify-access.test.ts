@@ -4,12 +4,13 @@ import { NextRequest } from "next/server";
 
 process.env.SHOPIFY_HMAC_SECRET = "shopify-test-secret";
 
-const mockFetchCustomerById = vi.fn();
+const mockFetchCustomerPurchaseCountById = vi.fn();
 const mockIssueTicket = vi.fn();
 const mockReadTicket = vi.fn();
 
 vi.mock("@/src/shopify/client", () => ({
-  fetchCustomerById: (...args: unknown[]) => mockFetchCustomerById(...args),
+  fetchCustomerPurchaseCountById: (...args: unknown[]) =>
+    mockFetchCustomerPurchaseCountById(...args),
 }));
 
 vi.mock("@/src/lib/rate-limit", () => ({
@@ -96,7 +97,7 @@ describe("Shopify buyer access exchange", () => {
     const token = createHmac("sha256", "shopify-test-secret")
       .update(customerId)
       .digest("hex");
-    mockFetchCustomerById.mockResolvedValue({ numberOfOrders: 0 });
+    mockFetchCustomerPurchaseCountById.mockResolvedValue(0);
 
     const response = await route.POST(
       post({
@@ -106,6 +107,6 @@ describe("Shopify buyer access exchange", () => {
       }),
     );
     expect(response.status).toBe(403);
-    expect(mockFetchCustomerById).toHaveBeenCalledWith(customerId);
+    expect(mockFetchCustomerPurchaseCountById).toHaveBeenCalledWith(customerId);
   });
 });

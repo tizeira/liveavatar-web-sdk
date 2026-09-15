@@ -3,17 +3,35 @@ import { CLARA_AGENT_TOOL_SECRET } from "@/app/api/secrets";
 import { hasValidAgentToolSecret } from "@/src/consultations/security";
 import { searchProductsForClara } from "@/src/shopify/client";
 import { createHash } from "node:crypto";
-import { kv } from "@vercel/kv";
 import type { ClaraCatalogProduct } from "@/src/shopify/types";
 import { logger } from "@/src/lib/logger/secure-logger";
 
 const CATALOG_CACHE_SECONDS = 4 * 60;
+const CATALOG_CACHE_MAX_ENTRIES = 100;
+const catalogCache = new Map<
+  string,
+  { expiresAt: number; products: ClaraCatalogProduct[] }
+>();
 
-function hasKvConfiguration() {
-  return Boolean(
-    (process.env.KV_REST_API_URL || process.env.KV_URL) &&
-      process.env.KV_REST_API_TOKEN,
-  );
+function readCatalogCache(key: string): ClaraCatalogProduct[] | null {
+  const cached = catalogCache.get(key);
+  if (!cached) return null;
+  if (cached.expiresAt <= Date.now()) {
+    catalogCache.delete(key);
+    return null;
+  }
+  return cached.products;
+}
+
+function writeCatalogCache(key: string, products: ClaraCatalogProduct[]) {
+  if (catalogCache.size >= CATALOG_CACHE_MAX_ENTRIES) {
+    const oldestKey = catalogCache.keys().next().value;
+    if (oldestKey) catalogCache.delete(oldestKey);
+  }
+  catalogCache.set(key, {
+    expiresAt: Date.now() + CATALOG_CACHE_SECONDS * 1000,
+    products,
+  });
 }
 
 function compactProduct(product: ClaraCatalogProduct) {
@@ -64,27 +82,13 @@ export async function POST(request: NextRequest) {
     const cacheKey = `clara:catalog-search:${createHash("sha256")
       .update(normalizedQuery)
       .digest("hex")}`;
-    let products: ClaraCatalogProduct[] | null = null;
-    let cacheHit = false;
-    if (hasKvConfiguration()) {
-      try {
-        products = await kv.get<ClaraCatalogProduct[]>(cacheKey);
-        cacheHit = Array.isArray(products);
-      } catch {
-        products = null;
-      }
-    }
+    let products = readCatalogCache(cacheKey);
+    const cacheHit = Array.isArray(products);
 
     const shopifyStartedAt = performance.now();
     if (!products) {
       products = await searchProductsForClara(query);
-      if (hasKvConfiguration()) {
-        try {
-          await kv.set(cacheKey, products, { ex: CATALOG_CACHE_SECONDS });
-        } catch {
-          // Cache is an optimization; Shopify remains the source of truth.
-        }
-      }
+      writeCatalogCache(cacheKey, products);
     }
     const shopifyMs = cacheHit
       ? 0

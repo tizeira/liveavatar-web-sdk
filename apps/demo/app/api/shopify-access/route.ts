@@ -6,7 +6,7 @@ import {
   verifyClaraShopifyAccessToken,
   verifyCustomerToken,
 } from "@/src/shopify";
-import { fetchCustomerById } from "@/src/shopify/client";
+import { fetchCustomerPurchaseCountById } from "@/src/shopify/client";
 import { deriveShopifyCustomerKey } from "@/src/consultations/security";
 import {
   CLARA_BUYER_COOKIE_NAME,
@@ -114,14 +114,14 @@ export async function POST(request: NextRequest) {
     // customer ID, so purchase eligibility is re-read from Shopify and the
     // unsigned orders_count parameter is never trusted.
     try {
-      const customer = await fetchCustomerById(customerId);
-      if (!customer) {
+      const purchaseCount = await fetchCustomerPurchaseCountById(customerId);
+      if (purchaseCount === null) {
         return NextResponse.json(
           { valid: false, error: "Customer not found" },
           { status: 401 },
         );
       }
-      verifiedOrdersCount = customer.numberOfOrders;
+      verifiedOrdersCount = purchaseCount;
       mode = "legacy_verified";
     } catch (error) {
       logger.warn(

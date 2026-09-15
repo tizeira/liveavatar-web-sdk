@@ -35,7 +35,7 @@ describe("Auth Bypass Prevention", () => {
       }
     });
 
-    it("DEBE usar un ticket HttpOnly validado en KV", async () => {
+    it("DEBE usar un ticket HttpOnly autenticado", async () => {
       const routePath = path.join(
         __dirname,
         "../../../app/api/start-custom-session/route.ts",
@@ -71,7 +71,7 @@ describe("Auth Bypass Prevention", () => {
       const routeCode = await fs.readFile(routePath, "utf-8");
 
       expect(routeCode).toContain("reserveClaraBuyerSession");
-      expect(routeCode).toContain("releaseClaraBuyerSession");
+      expect(routeCode).toContain("cancelClaraBuyerSession");
     });
 
     it("DEBE retornar 401 con mensaje descriptivo al fallar auth", async () => {

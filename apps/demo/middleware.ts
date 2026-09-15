@@ -121,7 +121,7 @@ export default auth(async (req) => {
   }
 
   // Presence only opens the UI shell; the page and paid-session endpoint both
-  // validate the opaque ticket against KV before returning private data or
+  // validate the authenticated ticket before returning private data or
   // creating a LiveAvatar session.
   if (pathname === "/" && req.cookies.has("clara_buyer_access")) {
     return NextResponse.next();

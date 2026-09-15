@@ -22,10 +22,17 @@ export default auth(async (req) => {
     const betaExemptPaths = [
       "/access",
       "/api/access",
+      // Machine-to-machine endpoints enforce their own HMAC/Bearer secrets.
+      // They cannot present the browser-only beta access cookie.
+      "/api/agent-tools",
+      "/api/consultations",
+      "/api/internal/retention",
+      "/api/webhooks/elevenlabs",
       "/_next",
       "/favicon.ico",
       "/icon.png",
       "/apple-icon.png",
+      "/clara-avatar.png",
       "/images",
       "/backgrounds",
     ];
@@ -91,7 +98,8 @@ export default auth(async (req) => {
     pathname.startsWith("/api/access") ||
     pathname.startsWith("/login") ||
     pathname.startsWith("/api/auth") ||
-    pathname.startsWith("/maintenance")
+    pathname.startsWith("/maintenance") ||
+    pathname === "/clara-avatar.png"
   ) {
     // If already logged in and trying to access login, redirect to home
     if (pathname === "/login" && session) {
@@ -108,6 +116,16 @@ export default auth(async (req) => {
   // Allow home page when coming from Shopify iframe with token
   // The page will validate the token client-side via /api/shopify-customer
   if (pathname === "/" && searchParams.has("shopify_token")) {
+    return NextResponse.next();
+  }
+
+  // Local visual QA only. NODE_ENV is always "production" in deployed builds,
+  // so this cannot bypass authentication on Vercel.
+  if (
+    process.env.NODE_ENV !== "production" &&
+    pathname === "/" &&
+    searchParams.has("design_preview")
+  ) {
     return NextResponse.next();
   }
 

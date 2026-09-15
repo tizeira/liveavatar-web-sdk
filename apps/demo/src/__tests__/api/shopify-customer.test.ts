@@ -29,24 +29,6 @@ vi.mock("@/src/lib/rate-limit", () => ({
   }),
 }));
 
-const mockGetCachedCustomer = vi.fn();
-const mockCacheCustomer = vi.fn();
-
-vi.mock("@/src/lib/db/queries", () => ({
-  getCachedCustomer: (...args: unknown[]) => mockGetCachedCustomer(...args),
-  cacheCustomer: (...args: unknown[]) => mockCacheCustomer(...args),
-}));
-
-const mockSessionCreate = vi.fn().mockResolvedValue({});
-
-vi.mock("@/src/lib/db/prisma", () => ({
-  prisma: {
-    session: {
-      create: (...args: unknown[]) => mockSessionCreate(...args),
-    },
-  },
-}));
-
 // Importar despues de los mocks
 const { POST } = await import("@/app/api/shopify-customer/route");
 const { generateCustomerToken } = await import("@/src/shopify");
@@ -74,18 +56,12 @@ function post(body: unknown): NextRequest {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockGetCachedCustomer.mockResolvedValue(null);
-  mockCacheCustomer.mockResolvedValue({});
-  mockSessionCreate.mockResolvedValue({});
 });
 
 // --- Tests ---------------------------------------------------------------
 
 describe("POST /api/shopify-customer - autenticacion antes que cache", () => {
   it("no devuelve PII cuando el body solo trae un email (sin token)", async () => {
-    // Simula que la victima uso Clara hace poco y esta en la cache
-    mockGetCachedCustomer.mockResolvedValue(VICTIM);
-
     const res = await POST(post({ email: VICTIM.shopifyEmail }));
     const json = await res.json();
 
@@ -101,16 +77,7 @@ describe("POST /api/shopify-customer - autenticacion antes que cache", () => {
     expect(body).not.toContain(VICTIM.skinType);
   });
 
-  it("no consulta la cache antes de verificar el HMAC", async () => {
-    await POST(post({ email: VICTIM.shopifyEmail }));
-
-    // Sin token valido, la cache no debe tocarse siquiera
-    expect(mockGetCachedCustomer).not.toHaveBeenCalled();
-  });
-
   it("rechaza con 401 cuando el token HMAC es invalido", async () => {
-    mockGetCachedCustomer.mockResolvedValue(VICTIM);
-
     const res = await POST(
       post({
         customer_id: VICTIM.shopifyId,
@@ -123,7 +90,6 @@ describe("POST /api/shopify-customer - autenticacion antes que cache", () => {
     expect(res.status).toBe(401);
     expect(json.valid).toBe(false);
     expect(json.customer).toBeNull();
-    expect(mockGetCachedCustomer).not.toHaveBeenCalled();
   });
 
   it("rechaza con 400 cuando el customer_id no es numerico", async () => {
@@ -135,7 +101,6 @@ describe("POST /api/shopify-customer - autenticacion antes que cache", () => {
     );
 
     expect(res.status).toBe(400);
-    expect(mockGetCachedCustomer).not.toHaveBeenCalled();
   });
 });
 
@@ -160,43 +125,9 @@ describe("POST /api/shopify-customer - camino valido", () => {
     expect(json.customer.firstName).toBe("Ana");
   });
 
-  it("consulta la cache usando el customer_id firmado, no el email", async () => {
-    const token = generateCustomerToken(VICTIM.shopifyId);
-
-    await POST(
-      post({
-        customer_id: VICTIM.shopifyId,
-        shopify_token: token,
-        email: "ana@example.com",
-      }),
-    );
-
-    expect(mockGetCachedCustomer).toHaveBeenCalledWith(VICTIM.shopifyId);
-  });
-
-  it("escribe la cache indexada por el customer_id firmado", async () => {
-    const token = generateCustomerToken(VICTIM.shopifyId);
-
-    await POST(
-      post({
-        customer_id: VICTIM.shopifyId,
-        shopify_token: token,
-        first_name: "Ana",
-        email: "ana@example.com",
-        orders_count: "2",
-      }),
-    );
-
-    expect(mockCacheCustomer).toHaveBeenCalledWith(
-      expect.objectContaining({ shopifyId: VICTIM.shopifyId }),
-    );
-  });
-
-  it("un cliente valido no puede envenenar la cache de otro email", async () => {
-    // Atacante con token propio valido, pero declarando el email de la victima
+  it("un cliente valido solo obtiene los datos aportados en su request firmado", async () => {
     const token = generateCustomerToken("1111111111");
-
-    await POST(
+    const response = await POST(
       post({
         customer_id: "1111111111",
         shopify_token: token,
@@ -205,11 +136,7 @@ describe("POST /api/shopify-customer - camino valido", () => {
         orders_count: "99",
       }),
     );
-
-    // La escritura debe quedar bajo el id del atacante, no bajo el email ajeno
-    const written = mockCacheCustomer.mock.calls[0]?.[0] as {
-      shopifyId: string;
-    };
-    expect(written.shopifyId).toBe("1111111111");
+    const json = await response.json();
+    expect(json.customer.id).toBe("1111111111");
   });
 });

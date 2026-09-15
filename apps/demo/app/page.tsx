@@ -210,6 +210,18 @@ export default function Home() {
 
     const params = new URLSearchParams(window.location.search);
 
+    // Development-only visual QA for Clara's screens. Middleware blocks this
+    // query in production, and no external avatar session is created.
+    if (process.env.NODE_ENV !== "production" && params.has("design_preview")) {
+      setCustomerData({
+        firstName: "Ivan",
+        ordersCount: 1,
+        lastOrderProduct: "Booster 02 — Beta Lift",
+      });
+      setPageState("verified");
+      return;
+    }
+
     // Flow 0: Mock mode for testing (use ?mock=scenario_name)
     if (isMockMode(params)) {
       const scenario = getMockScenario(params);
@@ -508,6 +520,11 @@ export default function Home() {
       <ClaraVoiceAgent
         userName={customerData?.firstName || session?.user?.name || null}
         customerData={customerData}
+        designPreview={
+          process.env.NODE_ENV !== "production" && typeof window !== "undefined"
+            ? new URLSearchParams(window.location.search).get("design_preview")
+            : null
+        }
       />
     </div>
   );

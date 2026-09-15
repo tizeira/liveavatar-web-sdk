@@ -122,3 +122,81 @@ export const CUSTOMER_EXISTS_QUERY = `
     }
   }
 `;
+
+export const PRODUCTS_FOR_CLARA_QUERY = `
+  query productsForClara($first: Int!) {
+    shop {
+      currencyCode
+      primaryDomain { url }
+    }
+    products(first: $first, query: "status:active", sortKey: TITLE) {
+      nodes {
+        id
+        title
+        handle
+        description
+        productType
+        tags
+        status
+        onlineStoreUrl
+        resourcePublicationsV2(first: 20) {
+          nodes {
+            isPublished
+            publication { name }
+          }
+        }
+        featuredMedia {
+          preview {
+            image {
+              url
+              altText
+            }
+          }
+        }
+        variants(first: 20) {
+          nodes {
+            availableForSale
+            price
+          }
+        }
+      }
+    }
+  }
+`;
+
+export const PRODUCT_FOR_CLARA_BY_HANDLE_QUERY = `
+  query productForClaraByHandle($handle: String!) {
+    shop {
+      currencyCode
+      primaryDomain { url }
+    }
+    productByHandle(handle: $handle) {
+      id
+      title
+      handle
+      description
+      status
+      onlineStoreUrl
+      resourcePublicationsV2(first: 20) {
+        nodes {
+          isPublished
+          publication { name }
+        }
+      }
+      featuredMedia {
+        preview {
+          image {
+            url
+            altText
+          }
+        }
+      }
+      variants(first: 20) {
+        nodes {
+          availableForSale
+          price
+        }
+      }
+    }
+  }
+`;

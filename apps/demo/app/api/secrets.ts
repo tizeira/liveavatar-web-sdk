@@ -60,6 +60,13 @@ export const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 // ELEVENLABS VOICE AGENT
 export const ELEVENLABS_AGENT_ID = process.env.ELEVENLABS_AGENT_ID || "";
 
+// ELEVENLABS WEBHOOKS / AGENT TOOLS (server-side only)
+export const ELEVENLABS_WEBHOOK_SECRET =
+  process.env.ELEVENLABS_WEBHOOK_SECRET || "";
+export const CLARA_AGENT_TOOL_SECRET =
+  process.env.CLARA_AGENT_TOOL_SECRET || "";
+export const CRON_SECRET = process.env.CRON_SECRET || "";
+
 // ELEVENLABS PLUGIN — HeyGen-stored secret (not the raw API key)
 export const HEYGEN_ELEVENLABS_SECRET_ID =
   process.env.HEYGEN_ELEVENLABS_SECRET_ID || "";

@@ -56,6 +56,21 @@ export interface ShopifyCustomerByIdResponse {
   customer: ShopifyCustomerNode | null;
 }
 
+export interface ClaraCatalogProduct {
+  id: string;
+  title: string;
+  handle: string;
+  description: string;
+  url: string | null;
+  imageUrl: string | null;
+  imageAlt: string | null;
+  availableForSale: boolean;
+  price: {
+    amount: string;
+    currencyCode: string;
+  } | null;
+}
+
 // ============================================================================
 // Processed Customer Data Types
 // ============================================================================

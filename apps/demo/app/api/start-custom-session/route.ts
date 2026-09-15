@@ -13,16 +13,22 @@ import {
   CHROMA_EDGE_SHARPNESS,
   CHROMA_BG_URL_DESKTOP,
   CHROMA_BG_URL_MOBILE,
+  SHOPIFY_HMAC_SECRET,
 } from "../secrets";
 import { NextRequest } from "next/server";
 import { rateLimitByEndpoint } from "@/src/lib/rate-limit";
-import { createSession } from "@/src/lib/db/queries";
 import {
   verifyCustomerToken,
   isValidCustomerId,
   cleanCustomerId,
 } from "@/src/shopify";
 import { logger } from "@/src/lib/logger/secure-logger";
+import { randomBytes, randomUUID } from "node:crypto";
+import { createClaraConsultation } from "@/src/consultations/repository";
+import {
+  deriveShopifyCustomerKey,
+  hashConsultationAccessToken,
+} from "@/src/consultations/security";
 
 export async function POST(request: Request) {
   // === RATE LIMIT CHECK ===
@@ -115,6 +121,8 @@ export async function POST(request: Request) {
 
   let session_token = "";
   let session_id = "";
+  const consultationId = randomUUID();
+  const consultationAccessToken = randomBytes(32).toString("base64url");
 
   // Select avatar based on device type
   const avatarId =
@@ -167,6 +175,11 @@ export async function POST(request: Request) {
       elevenlabs_agent_config: {
         secret_id: HEYGEN_ELEVENLABS_SECRET_ID,
         agent_id: ELEVENLABS_AGENT_ID,
+        dynamic_variables: {
+          // Correlates the provider's post-call webhook with this browser
+          // session. The separate recap access token is never sent upstream.
+          consultation_id: consultationId,
+        },
       },
     };
 
@@ -323,14 +336,21 @@ export async function POST(request: Request) {
     );
   }
 
-  // === DATABASE TRACKING ===
-  // Track session in database for analytics (non-blocking)
+  // === PRIVACY-MINIMIZED CONSULTATION STORAGE ===
+  // Voice remains available if storage is temporarily unavailable.
+  let consultationPersistenceAvailable = true;
   try {
-    await createSession({
-      sessionToken: session_token,
-      deviceType,
-      userId: session?.user?.id,
-      shopifyEmail: session?.user?.email || undefined,
+    await createClaraConsultation({
+      id: consultationId,
+      accessTokenHash: hashConsultationAccessToken(consultationAccessToken),
+      liveAvatarSessionId: session_id,
+      shopifyCustomerKey:
+        isShopifyUser && SHOPIFY_HMAC_SECRET
+          ? deriveShopifyCustomerKey(
+              cleanCustomerId(shopifyCustomerId || ""),
+              SHOPIFY_HMAC_SECRET,
+            )
+          : undefined,
     });
     logger.debug(
       "[DB] Session tracked",
@@ -342,6 +362,7 @@ export async function POST(request: Request) {
   } catch (dbError) {
     // Don't fail the request if DB tracking fails - just log it
     const err = dbError as Error;
+    consultationPersistenceAvailable = false;
     logger.warn(
       "[DB] Failed to track session (non-critical)",
       {
@@ -359,6 +380,9 @@ export async function POST(request: Request) {
     JSON.stringify({
       session_token,
       session_id,
+      consultation_id: consultationId,
+      consultation_access_token: consultationAccessToken,
+      consultation_persistence_available: consultationPersistenceAvailable,
       chroma_key_enabled: CHROMA_KEY_ENABLED,
       ...(CHROMA_KEY_ENABLED && {
         chroma_config: {

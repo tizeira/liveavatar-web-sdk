@@ -13,16 +13,16 @@ Estado: integración publicada únicamente en QA y activa para `testers` desde e
 ## Configuración remota aplicada en QA
 
 - `CLARA_AGENT_TOOL_SECRET` existe solamente en Vercel Preview y su forma Bearer solamente en el secreto de workspace de ElevenLabs.
-- Las herramientas `buscar_productos_shopify` y `guardar_rutina_clara` están adjuntas solamente a `clara-ai-qa` / `qa-routine-tools-2026-09-14`.
+- Las herramientas `buscar_productos_shopify` y `guardar_rutina_clara` están adjuntas solamente a `clara-ai-qa`; la rama activa es `qa-recap-routine-fix-2026-09-15` y heredó su configuración validada.
 - La rama QA obliga a buscar antes de recomendar, no inventar productos y guardar una única rutina después de una confirmación explícita en el turno siguiente.
 - `Clara QA post-call` está asociado solamente a esa rama, entrega `post_call_transcription` como JSON, no envía audio y tiene reintentos habilitados.
 - El endpoint de testers valida la firma HMAC con el SDK oficial, acepta únicamente el agente QA y persiste una transcripción normalizada, resumen y métricas permitidas.
 - Vercel Preview contiene las dos conexiones Neon, los secretos del conector QA, la autorización de herramientas y el secreto del webhook. Producción conserva su configuración anterior.
 - El tráfico de `clara-ai-qa` está en 100% para la rama QA. El agente `clara-ai` de Producción conserva Main en 100%.
 
-## Candidato de resumen y cierre
+## Rama activa de resumen y cierre
 
-- `qa-recap-routine-fix-2026-09-15` parte de la versión activa y se mantiene en 0% hasta completar el despliegue de Preview.
+- `qa-recap-routine-fix-2026-09-15` está desplegada en Vercel Preview y recibe el 100% del tráfico de `clara-ai-qa`; `qa-routine-tools-2026-09-14` queda en 0% como rollback inmediato.
 - Fija el idioma de análisis en español y extrae solamente `resumen_usuario`: 2–3 oraciones claras, sin nombres ni datos personales.
 - Una confirmación que también incluya agradecimiento o despedida debe ejecutar `guardar_rutina_clara` antes de la respuesta final.
 - Rechazos y respuestas ambiguas no guardan; la ambigüedad requiere una nueva confirmación.
@@ -31,7 +31,7 @@ Estado: integración publicada únicamente en QA y activa para `testers` desde e
 
 ## Validación pendiente de la persona tester
 
-La primera llamada autenticada validó micrófono, LiveAvatar, búsqueda Shopify, post-call y resumen, y detectó dos defectos: resumen en inglés y rutina sin guardar ante una confirmación combinada con despedida. El candidato anterior corrige ambos comportamientos. Después de desplegar su aplicación complementaria, deben completarse dos llamadas reales consecutivas con resumen en español, una rutina persistida y enlaces vigentes.
+La primera llamada autenticada validó micrófono, LiveAvatar, búsqueda Shopify, post-call y resumen, y detectó dos defectos: resumen en inglés y rutina sin guardar ante una confirmación combinada con despedida. La rama activa corrige ambos comportamientos. Para cerrar la aceptación deben completarse dos llamadas reales consecutivas con resumen en español, una rutina persistida y enlaces vigentes.
 
 No usar los templates directamente mientras contengan marcadores `<...>`.
 

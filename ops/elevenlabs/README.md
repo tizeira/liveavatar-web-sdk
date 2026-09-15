@@ -5,9 +5,9 @@ Initialized with the official ElevenLabs CLI 1.2.0 on 2026-09-11. Raw agent conf
 ## QA state verified on 2026-09-15
 
 - `clara-ai-qa` is the agent used only by Vercel Preview/testers.
-- Branch `qa-routine-tools-2026-09-14` receives 100% of that QA agent's traffic; its Main and the older experiment receive 0%.
-- Candidate branch `qa-recap-routine-fix-2026-09-15` remains at 0% while its matching Vercel Preview is validated. It fixes Spanish user-facing summaries, confirmation-plus-farewell routine saves and Shopify-grounded usage claims.
-- The three targeted candidate tests pass: affirmative closure saves, while rejection and ambiguity do not.
+- Branch `qa-recap-routine-fix-2026-09-15` receives 100% of that QA agent's traffic. Its Main, `qa-routine-tools-2026-09-14` and the older experiment receive 0%.
+- The active branch fixes Spanish user-facing summaries, confirmation-plus-farewell routine saves and Shopify-grounded usage claims. Its matching Vercel Preview is deployed at `testers.betaskintech.com`.
+- The three targeted branch tests pass: affirmative closure saves, while rejection and ambiguity do not.
 - The active QA revision has two server tools, no inherited knowledge base and the compact ordered-consultation prompt validated with synthetic tests.
 - `Clara QA post-call` sends JSON transcripts, without audio, to the signed testers endpoint. Delivery retries are enabled.
 - The production `clara-ai` agent remains on Main at 100%; its older experiment remains at 0% and it is not associated with the QA webhook.

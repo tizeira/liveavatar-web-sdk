@@ -561,34 +561,6 @@
   gap: 9px;
   margin-top: 22px;
 }
-.feedbackRow {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  margin: 20px 2px;
-}
-.feedbackButtons {
-  display: flex;
-  gap: 9px;
-}
-.vote {
-  min-width: 68px;
-  height: 46px;
-  border: 1.5px solid #e4e0da;
-  border-radius: 999px;
-  background: transparent;
-  color: #3b3833;
-  font-size: 16px;
-  font-weight: 650;
-  cursor: pointer;
-}
-.voteSelected {
-  border-color: var(--clara-blue);
-  background: #eef3fa;
-  color: var(--clara-blue-dark);
-}
-
 .preparingDot {
   width: 58px;
   height: 58px;

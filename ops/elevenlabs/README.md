@@ -6,12 +6,14 @@ Initialized with the official ElevenLabs CLI 1.2.0 on 2026-09-11. Raw agent conf
 
 - `clara-ai-qa` is the agent used only by Vercel Preview/testers.
 - Branch `qa-routine-tools-2026-09-14` receives 100% of that QA agent's traffic; its Main and the older experiment receive 0%.
+- Candidate branch `qa-recap-routine-fix-2026-09-15` remains at 0% while its matching Vercel Preview is validated. It fixes Spanish user-facing summaries, confirmation-plus-farewell routine saves and Shopify-grounded usage claims.
+- The three targeted candidate tests pass: affirmative closure saves, while rejection and ambiguity do not.
 - The active QA revision has two server tools, no inherited knowledge base and the compact ordered-consultation prompt validated with synthetic tests.
 - `Clara QA post-call` sends JSON transcripts, without audio, to the signed testers endpoint. Delivery retries are enabled.
 - The production `clara-ai` agent remains on Main at 100%; its older experiment remains at 0% and it is not associated with the QA webhook.
 - The public tool and post-call endpoints reject unsigned/unauthenticated requests with `401`.
 
-Rollback is limited to the QA agent: deploy its Main branch at 100%, set `qa-routine-tools-2026-09-14` to 0%, and detach the QA post-call association. Do not merge branches or change the production agent as part of rollback.
+Rollback is limited to the QA agent: route 100% back to `qa-routine-tools-2026-09-14` and set `qa-recap-routine-fix-2026-09-15` to 0%. Do not merge branches or change the production agent as part of rollback.
 
 ## Security gate before the first pull
 

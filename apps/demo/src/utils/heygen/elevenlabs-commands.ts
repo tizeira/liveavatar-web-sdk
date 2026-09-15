@@ -44,8 +44,6 @@ export function sendCustomerContext(
   session: ElevenLabsAgentSession,
   context: {
     firstName?: string;
-    lastName?: string;
-    email?: string;
     skinType?: string;
     skinConcerns?: string[];
     ordersCount?: number;
@@ -56,9 +54,7 @@ export function sendCustomerContext(
   const parts: string[] = [];
 
   if (context.firstName) {
-    parts.push(
-      `La cliente se llama ${context.firstName}${context.lastName ? " " + context.lastName : ""}.`,
-    );
+    parts.push(`La cliente se llama ${context.firstName}.`);
   }
 
   if (context.skinType) {

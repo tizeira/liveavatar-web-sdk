@@ -20,9 +20,18 @@ Estado: integración publicada únicamente en QA y activa para `testers` desde e
 - Vercel Preview contiene las dos conexiones Neon, los secretos del conector QA, la autorización de herramientas y el secreto del webhook. Producción conserva su configuración anterior.
 - El tráfico de `clara-ai-qa` está en 100% para la rama QA. El agente `clara-ai` de Producción conserva Main en 100%.
 
+## Candidato de resumen y cierre
+
+- `qa-recap-routine-fix-2026-09-15` parte de la versión activa y se mantiene en 0% hasta completar el despliegue de Preview.
+- Fija el idioma de análisis en español y extrae solamente `resumen_usuario`: 2–3 oraciones claras, sin nombres ni datos personales.
+- Una confirmación que también incluya agradecimiento o despedida debe ejecutar `guardar_rutina_clara` antes de la respuesta final.
+- Rechazos y respuestas ambiguas no guardan; la ambigüedad requiere una nueva confirmación.
+- Las zonas de uso, beneficios, productos y enlaces deben estar respaldados explícitamente por la respuesta de Shopify.
+- Las pruebas dirigidas del candidato pasan los tres escenarios de confirmación, rechazo y ambigüedad.
+
 ## Validación pendiente de la persona tester
 
-Falta una llamada real desde el enlace Shopify autenticado para comprobar conjuntamente micrófono, LiveAvatar, ejecución real de herramientas, entrega post-call, persistencia Neon y presentación del resumen/rutina. Las simulaciones del agente y las pruebas de aplicación ya cubren los casos de producto válido, producto inexistente, cierre incompleto, fuera de alcance, confirmación, firma, autorización e idempotencia.
+La primera llamada autenticada validó micrófono, LiveAvatar, búsqueda Shopify, post-call y resumen, y detectó dos defectos: resumen en inglés y rutina sin guardar ante una confirmación combinada con despedida. El candidato anterior corrige ambos comportamientos. Después de desplegar su aplicación complementaria, deben completarse dos llamadas reales consecutivas con resumen en español, una rutina persistida y enlaces vigentes.
 
 No usar los templates directamente mientras contengan marcadores `<...>`.
 

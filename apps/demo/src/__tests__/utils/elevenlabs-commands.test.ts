@@ -86,4 +86,12 @@ describe("sendCustomerContext - recent purchase", () => {
     sendCustomerContext(session, { firstName: "Ana" });
     expect(calls[0]).not.toContain("compra más reciente");
   });
+
+  it("personalizes with first name only", () => {
+    const { session, calls } = makeFakeSession();
+    sendCustomerContext(session, { firstName: "Ana" });
+    expect(calls[0]).toContain("La cliente se llama Ana.");
+    expect(calls[0]).not.toContain("apellido");
+    expect(calls[0]).not.toContain("@");
+  });
 });

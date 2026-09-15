@@ -41,6 +41,24 @@ function normalizeTranscript(value: unknown): ClaraTranscriptTurn[] {
   });
 }
 
+function userFacingSummary(analysis: Record<string, unknown>): string | null {
+  const dataCollection =
+    analysis.data_collection_results &&
+    typeof analysis.data_collection_results === "object"
+      ? (analysis.data_collection_results as Record<string, unknown>)
+      : {};
+  const collectedSummary =
+    dataCollection.resumen_usuario &&
+    typeof dataCollection.resumen_usuario === "object"
+      ? (dataCollection.resumen_usuario as Record<string, unknown>)
+      : {};
+
+  return (
+    stringValue(collectedSummary.value, 1200) ||
+    stringValue(analysis.transcript_summary, 4000)
+  );
+}
+
 function allowlistedAnalysisMetrics(
   analysis: Record<string, unknown>,
   metadata: Record<string, unknown>,
@@ -114,7 +132,7 @@ export async function POST(request: NextRequest) {
     data.analysis && typeof data.analysis === "object"
       ? (data.analysis as Record<string, unknown>)
       : {};
-  const summary = stringValue(analysis.transcript_summary, 4000);
+  const summary = userFacingSummary(analysis);
   const metadata =
     data.metadata && typeof data.metadata === "object"
       ? (data.metadata as Record<string, unknown>)

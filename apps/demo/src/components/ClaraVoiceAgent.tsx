@@ -632,8 +632,6 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
     // 2a. Silent customer info — no response triggered
     sendCustomerContext(session, {
       firstName: customerData?.firstName,
-      lastName: customerData?.lastName,
-      email: customerData?.email,
       skinType: customerData?.skinType,
       skinConcerns: customerData?.skinConcerns,
       ordersCount: customerData?.ordersCount,
@@ -1180,9 +1178,9 @@ const SessionRecap: React.FC<SessionRecapProps> = ({
   onViewChange,
   onTalkAgain,
 }) => {
-  const [vote, setVote] = useState<"up" | "down" | null>(null);
   const minutes = Math.max(1, Math.round(durationSeconds / 60));
   const product = customerData?.lastOrderProduct;
+  const hasRoutine = Boolean(result?.routine?.steps.length);
 
   if (view === "preparing") {
     return (
@@ -1292,8 +1290,11 @@ const SessionRecap: React.FC<SessionRecapProps> = ({
         </h1>
         <p className={styles.recapMeta}>Hoy · {minutes} min</p>
         <div className={styles.recapCard}>
-          <div className={styles.eyebrow}>Consulta completada</div>
-          <p className={styles.recapText}>{result?.summary}</p>
+          <div className={styles.eyebrow}>Resumen de tu consulta</div>
+          <p className={styles.recapText}>
+            {result?.summary ||
+              "La consulta terminó, pero el resumen todavía no está disponible."}
+          </p>
         </div>
         {product && (
           <div className={styles.recapCard}>
@@ -1301,37 +1302,24 @@ const SessionRecap: React.FC<SessionRecapProps> = ({
             <p className={`${styles.recapText} ${styles.display}`}>{product}</p>
           </div>
         )}
-        <div className={styles.feedbackRow}>
-          <span>¿Te ayudó Clara?</span>
-          <div className={styles.feedbackButtons}>
-            <button
-              type="button"
-              className={`${styles.vote} ${vote === "up" ? styles.voteSelected : ""}`}
-              onClick={() => setVote("up")}
-              aria-pressed={vote === "up"}
-            >
-              Sí
-            </button>
-            <button
-              type="button"
-              className={`${styles.vote} ${vote === "down" ? styles.voteSelected : ""}`}
-              onClick={() => setVote("down")}
-              aria-pressed={vote === "down"}
-            >
-              No
-            </button>
+        {!hasRoutine && (
+          <div className={styles.recapCard} role="status">
+            <div className={styles.eyebrow}>Rutina pendiente</div>
+            <p className={styles.recapText}>
+              No se guardó una rutina en esta consulta. Podés hablar nuevamente
+              con Clara para revisarla y confirmarla.
+            </p>
           </div>
-        </div>
+        )}
         <div className={styles.recapActions}>
           <button
             type="button"
             className={styles.primaryButton}
-            onClick={() => onViewChange("routine")}
-            disabled={!result?.routine?.steps.length}
+            onClick={() =>
+              hasRoutine ? onViewChange("routine") : onTalkAgain()
+            }
           >
-            {result?.routine?.steps.length
-              ? "Ver próximos pasos"
-              : "Rutina no definida"}
+            {hasRoutine ? "Ver próximos pasos" : "Hablar nuevamente con Clara"}
           </button>
           <a
             className={styles.secondaryButton}
@@ -1340,13 +1328,15 @@ const SessionRecap: React.FC<SessionRecapProps> = ({
           >
             Volver a la tienda
           </a>
-          <button
-            type="button"
-            className={styles.textButton}
-            onClick={onTalkAgain}
-          >
-            Hablar otra vez con Clara
-          </button>
+          {hasRoutine && (
+            <button
+              type="button"
+              className={styles.textButton}
+              onClick={onTalkAgain}
+            >
+              Hablar otra vez con Clara
+            </button>
+          )}
         </div>
       </div>
     </div>

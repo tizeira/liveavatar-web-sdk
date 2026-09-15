@@ -4,8 +4,15 @@ import { hasValidAgentToolSecret } from "@/src/consultations/security";
 import { saveClaraRoutine } from "@/src/consultations/repository";
 import type { ClaraRoutine, ClaraRoutineStep } from "@/src/consultations/types";
 import { fetchProductForClaraByHandle } from "@/src/shopify/client";
+import { sanitizeUserFacingSummary } from "@/src/consultations/privacy";
+import { consolidateRoutineSteps } from "@/src/consultations/routine";
 
-const validMoments = new Set(["morning", "evening", "weekly"]);
+const validMoments = new Set([
+  "morning",
+  "evening",
+  "morning_evening",
+  "weekly",
+]);
 
 function cleanText(value: unknown, maxLength: number): string {
   return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
@@ -37,7 +44,11 @@ export async function POST(request: NextRequest) {
   }
 
   const consultationId = cleanText(body.consultation_id, 64);
-  const summary = cleanText(body.summary, 1200);
+  const summary = sanitizeUserFacingSummary(cleanText(body.summary, 1200));
+  const customerHasMoisturizer =
+    typeof body.customer_has_moisturizer === "boolean"
+      ? body.customer_has_moisturizer
+      : null;
   const rawSteps = Array.isArray(body.steps) ? body.steps.slice(0, 12) : [];
   if (
     !/^[0-9a-f-]{36}$/i.test(consultationId) ||
@@ -90,10 +101,58 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  const consolidatedSteps = consolidateRoutineSteps(
+    steps.sort((a, b) => a.order - b.order),
+  );
+  const productsRequiringMoisturizer = consolidatedSteps
+    .map((step) => step.product)
+    .filter(
+      (product) =>
+        product?.companionCondition === "if_no_moisturizer" &&
+        product.companionProducts.length > 0,
+    );
+
+  if (productsRequiringMoisturizer.length && customerHasMoisturizer === null) {
+    return NextResponse.json(
+      {
+        error:
+          "Ask whether the customer already uses a moisturizer before saving this routine.",
+        code: "moisturizer_status_required",
+      },
+      { status: 422 },
+    );
+  }
+
+  if (productsRequiringMoisturizer.length && customerHasMoisturizer === false) {
+    const savedHandles = new Set(
+      consolidatedSteps
+        .map((step) => step.product?.handle)
+        .filter((handle): handle is string => Boolean(handle)),
+    );
+    const missingCompanions = productsRequiringMoisturizer.flatMap((product) =>
+      product!.companionProducts.some((companion) =>
+        savedHandles.has(companion.handle),
+      )
+        ? []
+        : product!.companionProducts,
+    );
+    if (missingCompanions.length) {
+      return NextResponse.json(
+        {
+          error:
+            "The validated companion moisturizer must be included before saving.",
+          code: "required_companion_missing",
+          required_companion_products: missingCompanions,
+        },
+        { status: 422 },
+      );
+    }
+  }
+
   const routine: ClaraRoutine = {
     concerns: cleanStringList(body.concerns, 8),
     cautions: cleanStringList(body.cautions, 8),
-    steps: steps.sort((a, b) => a.order - b.order),
+    steps: consolidatedSteps,
   };
 
   try {

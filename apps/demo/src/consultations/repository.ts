@@ -2,9 +2,11 @@ import { ClaraConsultationStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/src/lib/db/prisma";
 import type {
   ClaraConsultationResult,
+  ClaraConversationMemory,
   ClaraRoutine,
   ClaraTranscriptTurn,
 } from "./types";
+import { sanitizeUserFacingSummary } from "./privacy";
 
 const TRANSCRIPT_RETENTION_DAYS = 30;
 const RECORD_RETENTION_MONTHS = 12;
@@ -186,6 +188,21 @@ export async function getLatestClaraConsultation(shopifyCustomerKey: string) {
     where: {
       shopifyCustomerKey,
       recordExpiresAt: { gt: new Date() },
+      status: ClaraConsultationStatus.completed,
+    },
+    orderBy: [{ completedAt: "desc" }, { updatedAt: "desc" }],
+  });
+  return consultation ? toResult(consultation) : null;
+}
+
+export async function getRecentClaraConversationMemory(
+  shopifyCustomerKey: string,
+  limit = 3,
+): Promise<ClaraConversationMemory> {
+  const consultations = await prisma.claraConsultation.findMany({
+    where: {
+      shopifyCustomerKey,
+      recordExpiresAt: { gt: new Date() },
       status: {
         in: [
           ClaraConsultationStatus.routine_ready,
@@ -194,8 +211,38 @@ export async function getLatestClaraConsultation(shopifyCustomerKey: string) {
       },
     },
     orderBy: [{ completedAt: "desc" }, { updatedAt: "desc" }],
+    take: Math.min(Math.max(limit, 1), 3),
+    select: {
+      completedAt: true,
+      updatedAt: true,
+      summary: true,
+      routine: true,
+    },
   });
-  return consultation ? toResult(consultation) : null;
+
+  return consultations
+    .map((consultation) => {
+      const routine = consultation.routine as ClaraRoutine | null;
+      const concerns = [...new Set(routine?.concerns || [])].slice(0, 8);
+      const products = [
+        ...new Set(
+          (routine?.steps || [])
+            .map((step) => step.product?.title)
+            .filter((title): title is string => Boolean(title)),
+        ),
+      ].slice(0, 8);
+      return {
+        completedAt: (
+          consultation.completedAt || consultation.updatedAt
+        ).toISOString(),
+        summary: sanitizeUserFacingSummary(consultation.summary),
+        concerns,
+        products,
+      };
+    })
+    .filter(
+      (item) => item.summary || item.concerns.length || item.products.length,
+    );
 }
 
 export async function runConsultationRetention(now = new Date()) {

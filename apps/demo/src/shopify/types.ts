@@ -56,19 +56,27 @@ export interface ShopifyCustomerByIdResponse {
   customer: ShopifyCustomerNode | null;
 }
 
-export interface ClaraCatalogProduct {
+export interface ClaraCatalogPrice {
+  amount: string;
+  currencyCode: string;
+}
+
+export interface ClaraCatalogProductSummary {
   id: string;
   title: string;
   handle: string;
-  description: string;
   url: string | null;
   imageUrl: string | null;
   imageAlt: string | null;
   availableForSale: boolean;
-  price: {
-    amount: string;
-    currencyCode: string;
-  } | null;
+  price: ClaraCatalogPrice | null;
+  compareAtPrice: ClaraCatalogPrice | null;
+}
+
+export interface ClaraCatalogProduct extends ClaraCatalogProductSummary {
+  description: string;
+  companionCondition: "if_no_moisturizer" | null;
+  companionProducts: ClaraCatalogProductSummary[];
 }
 
 // ============================================================================

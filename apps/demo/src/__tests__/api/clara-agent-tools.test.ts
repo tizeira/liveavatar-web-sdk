@@ -114,6 +114,9 @@ describe("Clara routine tool", () => {
       imageAlt: null,
       availableForSale: true,
       price: { amount: "100", currencyCode: "ARS" },
+      compareAtPrice: null,
+      companionCondition: null,
+      companionProducts: [],
     });
 
     const response = await routineRoute.POST(
@@ -134,5 +137,166 @@ describe("Clara routine tool", () => {
 
     expect(json.routine.steps[0].product.title).toBe("Booster 02");
     expect(json.routine.steps[0].product.url).toContain("booster-02");
+  });
+
+  it("requires moisturizer status before saving a conditional companion", async () => {
+    mockFetchProduct.mockResolvedValue({
+      id: "gid://shopify/Product/1",
+      title: "Beta Hacker",
+      handle: "beta-hacker",
+      description: "Tratamiento",
+      url: "https://example.test/products/beta-hacker",
+      imageUrl: null,
+      imageAlt: null,
+      availableForSale: true,
+      price: { amount: "100", currencyCode: "ARS" },
+      compareAtPrice: null,
+      companionCondition: "if_no_moisturizer",
+      companionProducts: [
+        {
+          id: "gid://shopify/Product/2",
+          title: "Beta Hidra",
+          handle: "beta-hidra",
+          url: "https://example.test/products/beta-hidra",
+          imageUrl: null,
+          imageAlt: null,
+          availableForSale: true,
+          price: { amount: "80", currencyCode: "ARS" },
+          compareAtPrice: null,
+        },
+      ],
+    });
+
+    const response = await routineRoute.POST(
+      request("/api/agent-tools/save-routine", {
+        consultation_id: consultationId,
+        summary: "Rutina validada.",
+        steps: [
+          {
+            moment: "morning",
+            order: 1,
+            instruction: "Aplicar el tratamiento",
+            product_handle: "beta-hacker",
+          },
+        ],
+      }),
+    );
+
+    expect(response.status).toBe(422);
+    expect((await response.json()).code).toBe("moisturizer_status_required");
+    expect(mockSaveRoutine).not.toHaveBeenCalled();
+  });
+
+  it("requires the validated companion when the customer has no moisturizer", async () => {
+    const hacker = {
+      id: "gid://shopify/Product/1",
+      title: "Beta Hacker",
+      handle: "beta-hacker",
+      description: "Tratamiento",
+      url: "https://example.test/products/beta-hacker",
+      imageUrl: null,
+      imageAlt: null,
+      availableForSale: true,
+      price: { amount: "100", currencyCode: "ARS" },
+      compareAtPrice: null,
+      companionCondition: "if_no_moisturizer",
+      companionProducts: [
+        {
+          id: "gid://shopify/Product/2",
+          title: "Beta Hidra",
+          handle: "beta-hidra",
+          url: "https://example.test/products/beta-hidra",
+          imageUrl: null,
+          imageAlt: null,
+          availableForSale: true,
+          price: { amount: "80", currencyCode: "ARS" },
+          compareAtPrice: null,
+        },
+      ],
+    };
+    mockFetchProduct.mockResolvedValue(hacker);
+
+    const response = await routineRoute.POST(
+      request("/api/agent-tools/save-routine", {
+        consultation_id: consultationId,
+        summary: "Rutina validada.",
+        customer_has_moisturizer: false,
+        steps: [
+          {
+            moment: "morning",
+            order: 1,
+            instruction: "Aplicar el tratamiento",
+            product_handle: "beta-hacker",
+          },
+        ],
+      }),
+    );
+
+    const json = await response.json();
+    expect(response.status).toBe(422);
+    expect(json.code).toBe("required_companion_missing");
+    expect(json.required_companion_products[0].handle).toBe("beta-hidra");
+  });
+
+  it("accepts the treatment and companion together and consolidates repeated moments", async () => {
+    const companion = {
+      id: "gid://shopify/Product/2",
+      title: "Beta Hidra",
+      handle: "beta-hidra",
+      description: "Hidratante",
+      url: "https://example.test/products/beta-hidra",
+      imageUrl: null,
+      imageAlt: null,
+      availableForSale: true,
+      price: { amount: "80", currencyCode: "ARS" },
+      compareAtPrice: null,
+      companionCondition: null,
+      companionProducts: [],
+    };
+    const hacker = {
+      ...companion,
+      id: "gid://shopify/Product/1",
+      title: "Beta Hacker",
+      handle: "beta-hacker",
+      description: "Tratamiento",
+      companionCondition: "if_no_moisturizer",
+      companionProducts: [companion],
+    };
+    mockFetchProduct.mockImplementation((handle: string) =>
+      Promise.resolve(handle === "beta-hacker" ? hacker : companion),
+    );
+
+    const repeated = {
+      instruction: "Aplicar sobre la piel limpia",
+      frequency: "Todos los días",
+      product_handle: "beta-hacker",
+    };
+    const response = await routineRoute.POST(
+      request("/api/agent-tools/save-routine", {
+        consultation_id: consultationId,
+        summary: "Cliente Iván acordó una rutina.",
+        customer_has_moisturizer: false,
+        steps: [
+          { ...repeated, moment: "morning", order: 1 },
+          { ...repeated, moment: "evening", order: 2 },
+          {
+            moment: "morning_evening",
+            order: 3,
+            instruction: "Aplicar hidratante",
+            product_handle: "beta-hidra",
+          },
+        ],
+      }),
+    );
+
+    const json = await response.json();
+    expect(response.status).toBe(200);
+    expect(json.routine.steps).toHaveLength(2);
+    expect(json.routine.steps[0].moment).toBe("morning_evening");
+    expect(mockSaveRoutine).toHaveBeenCalledWith(
+      consultationId,
+      "La persona acordó una rutina.",
+      expect.objectContaining({ steps: expect.any(Array) }),
+    );
   });
 });

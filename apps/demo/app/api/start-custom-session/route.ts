@@ -24,7 +24,11 @@ import {
 } from "@/src/shopify";
 import { logger } from "@/src/lib/logger/secure-logger";
 import { randomBytes, randomUUID } from "node:crypto";
-import { createClaraConsultation } from "@/src/consultations/repository";
+import {
+  createClaraConsultation,
+  getRecentClaraConversationMemory,
+} from "@/src/consultations/repository";
+import type { ClaraConversationMemory } from "@/src/consultations/types";
 import {
   deriveShopifyCustomerKey,
   hashConsultationAccessToken,
@@ -125,6 +129,7 @@ export async function POST(request: Request) {
 
   let session_token = "";
   let session_id = "";
+  let conversationMemory: ClaraConversationMemory = [];
   const consultationId = randomUUID();
   const consultationAccessToken = randomBytes(32).toString("base64url");
 
@@ -346,6 +351,29 @@ export async function POST(request: Request) {
     );
   }
 
+  const shopifyCustomerKey =
+    isShopifyUser && SHOPIFY_HMAC_SECRET
+      ? deriveShopifyCustomerKey(
+          cleanCustomerId(shopifyCustomerId || ""),
+          SHOPIFY_HMAC_SECRET,
+        )
+      : undefined;
+
+  if (shopifyCustomerKey) {
+    try {
+      conversationMemory = await getRecentClaraConversationMemory(
+        shopifyCustomerKey,
+        3,
+      );
+    } catch (memoryError) {
+      logger.warn(
+        "[DB] Previous consultation memory unavailable (non-critical)",
+        { name: (memoryError as Error).name },
+        { route: "/api/start-custom-session" },
+      );
+    }
+  }
+
   // === PRIVACY-MINIMIZED CONSULTATION STORAGE ===
   // Voice remains available if storage is temporarily unavailable.
   let consultationPersistenceAvailable = true;
@@ -354,13 +382,7 @@ export async function POST(request: Request) {
       id: consultationId,
       accessTokenHash: hashConsultationAccessToken(consultationAccessToken),
       liveAvatarSessionId: session_id,
-      shopifyCustomerKey:
-        isShopifyUser && SHOPIFY_HMAC_SECRET
-          ? deriveShopifyCustomerKey(
-              cleanCustomerId(shopifyCustomerId || ""),
-              SHOPIFY_HMAC_SECRET,
-            )
-          : undefined,
+      shopifyCustomerKey,
     });
     logger.debug(
       "[DB] Session tracked",
@@ -393,6 +415,7 @@ export async function POST(request: Request) {
       consultation_id: consultationId,
       consultation_access_token: consultationAccessToken,
       consultation_persistence_available: consultationPersistenceAvailable,
+      conversation_memory: conversationMemory,
       chroma_key_enabled: CHROMA_KEY_ENABLED,
       ...(CHROMA_KEY_ENABLED && {
         chroma_config: {

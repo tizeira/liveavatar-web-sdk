@@ -165,6 +165,37 @@ describe("ElevenLabs post-call webhook", () => {
     );
   });
 
+  it("redacts a personal name from the user-facing summary", async () => {
+    const consultationId = "51bcaeed-9e1b-4c75-ad05-7b23fbd9d46f";
+    const response = await POST(
+      signedRequest({
+        type: "post_call_transcription",
+        data: {
+          agent_id: "test-agent-id",
+          conversation_id: "conversation-redacted",
+          transcript: [],
+          analysis: {
+            data_collection_results: {
+              resumen_usuario: {
+                value: "Cliente Iván Tizeira busca una rutina hidratante.",
+              },
+            },
+          },
+          conversation_initiation_client_data: {
+            dynamic_variables: { consultation_id: consultationId },
+          },
+        },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockCompleteConsultation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        summary: "La persona busca una rutina hidratante.",
+      }),
+    );
+  });
+
   it("returns a retryable error when persistence fails", async () => {
     mockCompleteConsultation.mockRejectedValueOnce(new Error("db unavailable"));
     const response = await POST(

@@ -7,6 +7,7 @@ import {
 } from "@/app/api/secrets";
 import { completeClaraConsultation } from "@/src/consultations/repository";
 import type { ClaraTranscriptTurn } from "@/src/consultations/types";
+import { sanitizeUserFacingSummary } from "@/src/consultations/privacy";
 
 const elevenlabs = new ElevenLabsClient({ apiKey: ELEVENLABS_API_KEY });
 
@@ -53,10 +54,10 @@ function userFacingSummary(analysis: Record<string, unknown>): string | null {
       ? (dataCollection.resumen_usuario as Record<string, unknown>)
       : {};
 
-  return (
+  const summary =
     stringValue(collectedSummary.value, 1200) ||
-    stringValue(analysis.transcript_summary, 4000)
-  );
+    stringValue(analysis.transcript_summary, 4000);
+  return summary ? sanitizeUserFacingSummary(summary) : null;
 }
 
 function allowlistedAnalysisMetrics(

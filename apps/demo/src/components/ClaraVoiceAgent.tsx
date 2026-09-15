@@ -25,7 +25,11 @@ import { sendCustomerContext } from "../utils/heygen/elevenlabs-commands";
 import { waitForMediaPlaybackReady } from "../utils/media-playback-readiness";
 import { useChromaKey } from "../hooks/useChromaKey";
 import type { ChromaKeyConfig } from "../hooks/useChromaKey";
-import type { ClaraConsultationResult } from "../consultations/types";
+import type {
+  ClaraConsultationResult,
+  ClaraConversationMemory,
+} from "../consultations/types";
+import type { ClaraCatalogProduct } from "../shopify/types";
 import styles from "./ClaraVoiceAgent.module.css";
 
 // Debug (solo preview/develop)
@@ -637,6 +641,7 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
       ordersCount: customerData?.ordersCount,
       lastOrderProduct: customerData?.lastOrderProduct,
       lastOrderDate: customerData?.lastOrderDate,
+      conversationMemory: customerData?.conversationMemory,
     });
 
     // 2b. Trigger response 150ms later (gives agent time to ingest context).
@@ -1159,6 +1164,65 @@ const SessionWrapper: React.FC<SessionWrapperProps> = ({
 
 type RecapView = "preparing" | "summary" | "routine";
 
+function formatCatalogPrice(product: ClaraCatalogProduct): string | null {
+  if (!product.price) return null;
+  const amount = Number(product.price.amount);
+  if (!Number.isFinite(amount)) return null;
+  return new Intl.NumberFormat("es-AR", {
+    style: "currency",
+    currency: product.price.currencyCode,
+    maximumFractionDigits: amount % 1 === 0 ? 0 : 2,
+  }).format(amount);
+}
+
+const RoutineProductCard: React.FC<{ product: ClaraCatalogProduct }> = ({
+  product,
+}) => {
+  if (!product.url) return null;
+  const price = formatCatalogPrice(product);
+  const compareAtPrice = product.compareAtPrice
+    ? formatCatalogPrice({ ...product, price: product.compareAtPrice })
+    : null;
+
+  return (
+    <a
+      className={styles.productCard}
+      href={product.url}
+      target="_blank"
+      rel="noreferrer"
+      aria-label={`Ver ${product.title} en la tienda`}
+    >
+      <div className={styles.productImageWrap}>
+        {product.imageUrl ? (
+          // Shopify CDN URL is validated server-side with the canonical product.
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            className={styles.productImage}
+            src={product.imageUrl}
+            alt={product.imageAlt || product.title}
+            loading="lazy"
+          />
+        ) : (
+          <span className={styles.productImageFallback} aria-hidden="true">
+            BETA
+          </span>
+        )}
+      </div>
+      <div className={styles.productDetails}>
+        <span className={styles.productName}>{product.title}</span>
+        {(price || compareAtPrice) && (
+          <span className={styles.productPrices}>
+            {price && <strong>{price}</strong>}
+            {compareAtPrice && <del>{compareAtPrice}</del>}
+            {compareAtPrice && <em>Oferta</em>}
+          </span>
+        )}
+        <span className={styles.productLink}>Ver producto</span>
+      </div>
+    </a>
+  );
+};
+
 interface SessionRecapProps {
   view: RecapView;
   durationSeconds: number;
@@ -1243,7 +1307,9 @@ const SessionRecap: React.FC<SessionRecapProps> = ({
                   ? "Mañana"
                   : step.moment === "evening"
                     ? "Noche"
-                    : "Semanal"}{" "}
+                    : step.moment === "morning_evening"
+                      ? "Mañana y noche"
+                      : "Semanal"}{" "}
                 · Paso {step.order}
               </div>
               <p className={styles.recapText}>{step.instruction}</p>
@@ -1251,14 +1317,7 @@ const SessionRecap: React.FC<SessionRecapProps> = ({
                 <p className={styles.recapMeta}>{step.frequency}</p>
               )}
               {step.product?.url && (
-                <a
-                  className={styles.secondaryButton}
-                  href={step.product.url}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Ver {step.product.title}
-                </a>
+                <RoutineProductCard product={step.product} />
               )}
             </div>
           ))}
@@ -1404,9 +1463,18 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
     useState<ClaraConsultationResult | null>(null);
   const [consultationProcessingError, setConsultationProcessingError] =
     useState<string | null>(null);
+  const [conversationMemory, setConversationMemory] =
+    useState<ClaraConversationMemory>([]);
   const sessionStartedAtRef = useRef<number | null>(null);
   const { fixedHeight, isInIframe } = useFixedHeight();
   const { isDesktop } = useScreenSize();
+  const activeCustomerData = useMemo<CustomerData | null>(
+    () =>
+      customerData || conversationMemory.length
+        ? { ...(customerData || {}), conversationMemory }
+        : null,
+    [customerData, conversationMemory],
+  );
 
   // Rate limit state
   const [isRateLimited, setIsRateLimited] = useState(false);
@@ -1453,6 +1521,7 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
   const handleStartCall = useCallback(async () => {
     setIsStarting(true);
     setError(null);
+    setConversationMemory([]);
 
     try {
       // Preserve Shopify authentication when the customer entered through a
@@ -1500,6 +1569,7 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
         consultation_id,
         consultation_access_token,
         consultation_persistence_available,
+        conversation_memory,
       } = await res.json();
       sessionStartedAtRef.current = Date.now();
       setRecapView(null);
@@ -1514,6 +1584,9 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
               accessToken: consultation_access_token,
             }
           : null,
+      );
+      setConversationMemory(
+        Array.isArray(conversation_memory) ? conversation_memory : [],
       );
       setSessionToken(session_token);
       setChromaKeyEnabled(chroma_key_enabled === true);
@@ -1727,7 +1800,7 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
         <LiveAvatarContextProvider
           sessionAccessToken={sessionToken}
           userName={userName}
-          customerData={customerData}
+          customerData={activeCustomerData}
         >
           <SessionWrapper
             onSessionStopped={handleSessionStopped}

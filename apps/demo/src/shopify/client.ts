@@ -65,7 +65,7 @@ export async function shopifyGraphQL<T>(
   return result.data;
 }
 
-type ClaraProductNode = {
+type ClaraProductBaseNode = {
   id: string;
   title: string;
   handle: string;
@@ -87,15 +87,23 @@ type ClaraProductNode = {
     nodes: Array<{
       availableForSale: boolean;
       price: string;
+      compareAtPrice: string | null;
     }>;
   };
 };
 
-function toClaraCatalogProduct(
-  node: ClaraProductNode,
+type ClaraProductNode = ClaraProductBaseNode & {
+  companionCondition?: { value: string } | null;
+  companionProducts?: {
+    references?: { nodes: ClaraProductBaseNode[] } | null;
+  } | null;
+};
+
+function toClaraCatalogProductSummary(
+  node: ClaraProductBaseNode,
   currencyCode: string,
   primaryDomainUrl: string,
-): ClaraCatalogProduct {
+) {
   const availableVariant = node.variants.nodes.find(
     (variant) => variant.availableForSale,
   );
@@ -109,7 +117,6 @@ function toClaraCatalogProduct(
     id: node.id,
     title: node.title,
     handle: node.handle,
-    description: node.description.trim().slice(0, 1200),
     url: isPublishedOnline
       ? node.onlineStoreUrl ||
         `${primaryDomainUrl.replace(/\/$/, "")}/products/${node.handle}`
@@ -121,6 +128,39 @@ function toClaraCatalogProduct(
       node.status === "ACTIVE" &&
       isPublishedOnline,
     price: firstVariant ? { amount: firstVariant.price, currencyCode } : null,
+    compareAtPrice:
+      firstVariant?.compareAtPrice &&
+      Number(firstVariant.compareAtPrice) > Number(firstVariant.price)
+        ? { amount: firstVariant.compareAtPrice, currencyCode }
+        : null,
+  };
+}
+
+function toClaraCatalogProduct(
+  node: ClaraProductNode,
+  currencyCode: string,
+  primaryDomainUrl: string,
+): ClaraCatalogProduct {
+  const product = toClaraCatalogProductSummary(
+    node,
+    currencyCode,
+    primaryDomainUrl,
+  );
+  const companionCondition =
+    node.companionCondition?.value === "if_no_moisturizer"
+      ? "if_no_moisturizer"
+      : null;
+  const companionProducts = (node.companionProducts?.references?.nodes || [])
+    .map((companion) =>
+      toClaraCatalogProductSummary(companion, currencyCode, primaryDomainUrl),
+    )
+    .filter((companion) => companion.availableForSale && companion.url);
+
+  return {
+    ...product,
+    description: node.description.trim().slice(0, 1200),
+    companionCondition,
+    companionProducts,
   };
 }
 

@@ -94,4 +94,25 @@ describe("sendCustomerContext - recent purchase", () => {
     expect(calls[0]).not.toContain("apellido");
     expect(calls[0]).not.toContain("@");
   });
+
+  it("adds recent sanitized consultation memory and follow-up guidance", () => {
+    const { session, calls } = makeFakeSession();
+    sendCustomerContext(session, {
+      firstName: "Ana",
+      conversationMemory: [
+        {
+          completedAt: "2026-05-31T12:00:00Z",
+          summary: "La persona consultó por hidratación.",
+          concerns: ["piel seca"],
+          products: ["Beta Hidra"],
+        },
+      ],
+    });
+
+    expect(calls[0]).toContain("Historial validado de consultas");
+    expect(calls[0]).toContain("ayer");
+    expect(calls[0]).toContain("Beta Hidra");
+    expect(calls[0]).toContain("preguntá cómo le resultó");
+    expect(calls[0]).not.toContain("Tizeira");
+  });
 });

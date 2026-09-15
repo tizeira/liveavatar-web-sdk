@@ -561,6 +561,103 @@
   gap: 9px;
   margin-top: 22px;
 }
+.productCard {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 14px;
+  margin-top: 18px;
+  padding: 12px;
+  border: 1px solid var(--clara-line);
+  border-radius: 18px;
+  background: #fff;
+  color: var(--clara-ink);
+  text-decoration: none;
+  box-shadow: 0 8px 24px rgba(16, 24, 40, 0.07);
+  transition:
+    transform 160ms ease,
+    box-shadow 160ms ease,
+    border-color 160ms ease;
+}
+.productCard:hover {
+  transform: translateY(-2px);
+  border-color: rgba(11, 99, 206, 0.28);
+  box-shadow: 0 12px 30px rgba(16, 24, 40, 0.11);
+}
+.productCard:focus-visible {
+  outline: 3px solid rgba(127, 178, 242, 0.72);
+  outline-offset: 3px;
+}
+.productImageWrap {
+  display: grid;
+  width: 96px;
+  height: 96px;
+  overflow: hidden;
+  place-items: center;
+  border-radius: 14px;
+  background: #f4f1ec;
+}
+.productImage {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.productImageFallback {
+  color: var(--clara-blue);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.22em;
+}
+.productDetails {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 7px;
+}
+.productName {
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+.productPrices {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+.productPrices strong {
+  font-size: 17px;
+}
+.productPrices del {
+  color: var(--clara-soft);
+}
+.productPrices em {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #e8f2ff;
+  color: var(--clara-blue-dark);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+.productLink {
+  color: var(--clara-blue);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+@media (max-width: 420px) {
+  .productCard {
+    grid-template-columns: 82px minmax(0, 1fr);
+  }
+  .productImageWrap {
+    width: 82px;
+    height: 82px;
+  }
+}
 .preparingDot {
   width: 58px;
   height: 58px;

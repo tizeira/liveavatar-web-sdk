@@ -5,6 +5,7 @@ import {
   createClaraConsultation,
   getClaraConsultation,
   getLatestClaraConsultation,
+  getRecentClaraConversationMemory,
   runConsultationRetention,
   saveClaraRoutine,
 } from "@/src/consultations/repository";
@@ -17,18 +18,20 @@ const enabled = process.env.RUN_NEON_INTEGRATION === "1";
 const firstId = "c0dec0de-0000-4000-8000-000000000001";
 const secondId = "c0dec0de-0000-4000-8000-000000000002";
 const ids = [firstId, secondId];
+const metricDate = new Date("2026-09-14T00:00:00.000Z");
 
 describe.skipIf(!enabled)("Clara repository against isolated Neon QA", () => {
   afterAll(async () => {
     await prisma.claraConsultation.deleteMany({ where: { id: { in: ids } } });
     await prisma.claraDailyMetric.deleteMany({
-      where: { date: new Date("2026-09-14T00:00:00.000Z") },
+      where: { date: metricDate },
     });
     await prisma.$disconnect();
   });
 
   it("enforces access, idempotency, customer isolation and retention", async () => {
     await prisma.claraConsultation.deleteMany({ where: { id: { in: ids } } });
+    await prisma.claraDailyMetric.deleteMany({ where: { date: metricDate } });
     const token = "integration-browser-secret";
     const customerA = "a".repeat(64);
     const customerB = "b".repeat(64);
@@ -38,6 +41,10 @@ describe.skipIf(!enabled)("Clara repository against isolated Neon QA", () => {
       accessTokenHash: hashConsultationAccessToken(token),
       liveAvatarSessionId: "integration-liveavatar-a",
       shopifyCustomerKey: customerA,
+    });
+    await prisma.claraConsultation.update({
+      where: { id: firstId },
+      data: { completedAt: metricDate },
     });
     const pending = await getClaraConsultation(firstId);
     expect(pending).not.toBeNull();
@@ -53,7 +60,7 @@ describe.skipIf(!enabled)("Clara repository against isolated Neon QA", () => {
       elevenLabsConversationId: "integration-elevenlabs-a",
       transcript: [{ role: "user" as const, message: "Consulta ficticia" }],
       analysisMetrics: { callSuccessful: "success" },
-      summary: "Resumen ficticio",
+      summary: "Cliente Iván Tizeira consultó por hidratación",
     };
     await completeClaraConsultation(completion);
     await completeClaraConsultation(completion);
@@ -70,13 +77,31 @@ describe.skipIf(!enabled)("Clara repository against isolated Neon QA", () => {
         },
       ],
     };
-    await saveClaraRoutine(firstId, "Resumen con rutina", routine);
-    await saveClaraRoutine(firstId, "Resumen con rutina", routine);
+    await saveClaraRoutine(
+      firstId,
+      "Cliente Iván Tizeira consultó por hidratación",
+      routine,
+    );
+    await saveClaraRoutine(
+      firstId,
+      "Cliente Iván Tizeira consultó por hidratación",
+      routine,
+    );
 
     expect((await getLatestClaraConsultation(customerA))?.routine).toEqual(
       routine,
     );
     expect(await getLatestClaraConsultation(customerB)).toBeNull();
+
+    const memory = await getRecentClaraConversationMemory(customerA);
+    expect(memory).toEqual([
+      expect.objectContaining({
+        summary: "La persona consultó por hidratación",
+        concerns: ["hydration"],
+      }),
+    ]);
+    expect(JSON.stringify(memory)).not.toContain("Consulta ficticia");
+    expect(await getRecentClaraConversationMemory(customerB)).toEqual([]);
 
     await createClaraConsultation({
       id: secondId,
@@ -101,8 +126,8 @@ describe.skipIf(!enabled)("Clara repository against isolated Neon QA", () => {
       await prisma.claraConsultation.findUnique({ where: { id: secondId } }),
     ).toBeNull();
 
-    const metric = await prisma.claraDailyMetric.findFirst({
-      where: { consultationsCompleted: { gte: 1 } },
+    const metric = await prisma.claraDailyMetric.findUnique({
+      where: { date: metricDate },
     });
     expect(metric?.consultationsCompleted).toBe(1);
     expect(metric?.consultationsWithRoutine).toBe(1);

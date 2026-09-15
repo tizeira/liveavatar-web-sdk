@@ -157,6 +157,47 @@ export const PRODUCTS_FOR_CLARA_QUERY = `
           nodes {
             availableForSale
             price
+            compareAtPrice
+          }
+        }
+        companionCondition: metafield(namespace: "custom", key: "clara_companion_condition") {
+          value
+        }
+        companionProducts: metafield(namespace: "custom", key: "clara_companion_products") {
+          references(first: 5) {
+            nodes {
+              ... on Product {
+                id
+                title
+                handle
+                description
+                productType
+                tags
+                status
+                onlineStoreUrl
+                resourcePublicationsV2(first: 20) {
+                  nodes {
+                    isPublished
+                    publication { name }
+                  }
+                }
+                featuredMedia {
+                  preview {
+                    image {
+                      url
+                      altText
+                    }
+                  }
+                }
+                variants(first: 20) {
+                  nodes {
+                    availableForSale
+                    price
+                    compareAtPrice
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -195,6 +236,47 @@ export const PRODUCT_FOR_CLARA_BY_HANDLE_QUERY = `
         nodes {
           availableForSale
           price
+          compareAtPrice
+        }
+      }
+      companionCondition: metafield(namespace: "custom", key: "clara_companion_condition") {
+        value
+      }
+      companionProducts: metafield(namespace: "custom", key: "clara_companion_products") {
+        references(first: 5) {
+          nodes {
+            ... on Product {
+              id
+              title
+              handle
+              description
+              productType
+              tags
+              status
+              onlineStoreUrl
+              resourcePublicationsV2(first: 20) {
+                nodes {
+                  isPublished
+                  publication { name }
+                }
+              }
+              featuredMedia {
+                preview {
+                  image {
+                    url
+                    altText
+                  }
+                }
+              }
+              variants(first: 20) {
+                nodes {
+                  availableForSale
+                  price
+                  compareAtPrice
+                }
+              }
+            }
+          }
         }
       }
     }

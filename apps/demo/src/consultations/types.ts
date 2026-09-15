@@ -7,12 +7,21 @@ export type ClaraTranscriptTurn = {
 };
 
 export type ClaraRoutineStep = {
-  moment: "morning" | "evening" | "weekly";
+  moment: "morning" | "evening" | "morning_evening" | "weekly";
   order: number;
   instruction: string;
   frequency?: string;
   product: ClaraCatalogProduct | null;
 };
+
+export type ClaraConversationMemoryItem = {
+  completedAt: string;
+  summary: string;
+  concerns: string[];
+  products: string[];
+};
+
+export type ClaraConversationMemory = ClaraConversationMemoryItem[];
 
 export type ClaraRoutine = {
   concerns: string[];

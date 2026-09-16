@@ -1,3 +1,7 @@
+> ⛔ **REEMPLAZADO por `SETUP.md`** (2026-06-04). El snippet Liquid de abajo tenía un bug de
+> `url_encode` (encodeaba toda la URL). Usá `page.clara.liquid` + `SETUP.md` de este folder.
+> Este archivo queda solo como histórico.
+
 # Migración iframe → redirect + última compra
 
 Dos cambios manuales (no son código del repo): el tema Liquid de Shopify y el

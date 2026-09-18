@@ -21,8 +21,11 @@ export {
   SessionState,
   SessionMode,
   AgentType,
+  AgentControlCommandKind,
+  ElevenLabsAgentResponseKind,
   Language,
   SessionDisconnectReason,
+  SessionDiagnosticEvent,
   AgentEventsEnum,
   AgentEvent,
   CommandEventsEnum,
@@ -32,6 +35,7 @@ export type {
   ElevenLabsAgentEventPayload,
   ElevenLabsAgentCommandPayload,
   ElevenLabsAgentCommandEvent,
+  SessionDiagnosticEntry,
 } from "./LiveAvatarSession";
 export {
   VoiceChatState,

@@ -26,6 +26,10 @@ import {
   SessionInfo,
   SessionMode,
   AgentType,
+  AgentControlCommandKind,
+  ElevenLabsAgentResponseKind,
+  SessionDiagnosticEntry,
+  SessionDiagnosticEvent,
 } from "./types";
 import {
   ConnectionQualityIndicator,
@@ -122,12 +126,15 @@ export class LiveAvatarSession extends (EventEmitter as new () => TypedEmitter<
   private _remoteVideoTrack: RemoteVideoTrack | null = null;
   private readonly _mode: SessionMode;
   private readonly _agentType: AgentType;
+  private readonly diagnosticStartedAt: number;
+  private terminalDiagnosticEmitted = false;
 
   constructor(sessionAccessToken: string, config?: SessionConfig) {
     super();
 
     this._mode = parseSessionModeFromToken(sessionAccessToken);
     this._agentType = parseAgentTypeFromToken(sessionAccessToken);
+    this.diagnosticStartedAt = Date.now();
 
     // Required to construct the room
     this.config = config ?? {};
@@ -204,6 +211,9 @@ export class LiveAvatarSession extends (EventEmitter as new () => TypedEmitter<
         // Track the different events from the room, server, and websocket
         this.trackEvents();
         await this.room.connect(livekitRoomUrl, livekitClientToken);
+        this.emitDiagnostic({
+          event: SessionDiagnosticEvent.ROOM_CONNECTED,
+        });
         await this.waitForRequiredParticipants();
         this.connectionQualityIndicator.start(this.room);
       }
@@ -396,12 +406,14 @@ export class LiveAvatarSession extends (EventEmitter as new () => TypedEmitter<
       }
       const emitArgs = getAgentEventEmitArgs(eventMsg);
       if (emitArgs) {
+        this.observeAgentEvent(eventMsg);
         const [event_type, ...event_data] = emitArgs;
         this.emit(event_type, ...event_data);
       }
     });
 
     this.on(AgentEventsEnum.SESSION_STOPPED, (event) => {
+      this.emitDiagnostic({ event: SessionDiagnosticEvent.SESSION_STOPPED });
       console.warn(
         "[SDK:SESSION_STOPPED] Server stopped session, reason:",
         event.stop_reason,
@@ -423,6 +435,7 @@ export class LiveAvatarSession extends (EventEmitter as new () => TypedEmitter<
     });
 
     this.room.on(RoomEvent.Disconnected, (reason) => {
+      this.emitDiagnostic({ event: SessionDiagnosticEvent.ROOM_DISCONNECTED });
       console.warn("Room disconnected, reason:", reason);
       this.handleRoomDisconnect();
     });
@@ -619,6 +632,10 @@ export class LiveAvatarSession extends (EventEmitter as new () => TypedEmitter<
   }
 
   private postStop(reason: SessionDisconnectReason): void {
+    if (!this.terminalDiagnosticEmitted) {
+      this.terminalDiagnosticEmitted = true;
+      this.emitDiagnostic({ event: SessionDiagnosticEvent.SESSION_ENDED });
+    }
     this.state = SessionState.DISCONNECTED;
     this.emit(SessionEvent.SESSION_DISCONNECTED, reason);
   }
@@ -649,10 +666,98 @@ export class LiveAvatarSession extends (EventEmitter as new () => TypedEmitter<
       );
     }
     const data = new TextEncoder().encode(JSON.stringify(payload));
-    this.room.localParticipant.publishData(data, {
-      reliable: true,
-      topic: LIVEKIT_COMMAND_CHANNEL_TOPIC,
+    const commandKind = this.getCommandKind(payload);
+    this.emitDiagnostic({
+      event: SessionDiagnosticEvent.AGENT_CONTROL_PUBLISH_ATTEMPTED,
+      commandKind,
     });
+
+    try {
+      const published = this.room.localParticipant.publishData(data, {
+        reliable: true,
+        topic: LIVEKIT_COMMAND_CHANNEL_TOPIC,
+      });
+      // LiveKit resolves when the local publish operation settles. This is not
+      // an acknowledgement that the connector or ElevenLabs received it.
+      void Promise.resolve(published).then(
+        () =>
+          this.emitDiagnostic({
+            event: SessionDiagnosticEvent.AGENT_CONTROL_PUBLISH_SETTLED,
+            commandKind,
+          }),
+        () =>
+          this.emitDiagnostic({
+            event: SessionDiagnosticEvent.AGENT_CONTROL_PUBLISH_REJECTED,
+            commandKind,
+          }),
+      );
+    } catch (error) {
+      this.emitDiagnostic({
+        event: SessionDiagnosticEvent.AGENT_CONTROL_PUBLISH_REJECTED,
+        commandKind,
+      });
+      throw error;
+    }
+  }
+
+  private observeAgentEvent(event: AgentEvent): void {
+    if (event.event_type === AgentEventsEnum.ELEVENLABS_AGENT_EVENT) {
+      this.emitDiagnostic({
+        event: SessionDiagnosticEvent.ELEVENLABS_AGENT_EVENT_RECEIVED,
+        elevenLabsResponseKind: this.getElevenLabsResponseKind(
+          event.elevenlabs_event_type,
+        ),
+      });
+      return;
+    }
+
+    if (event.event_type === AgentEventsEnum.AVATAR_SPEAK_STARTED) {
+      this.emitDiagnostic({ event: SessionDiagnosticEvent.AVATAR_SPEAK_STARTED });
+    } else if (event.event_type === AgentEventsEnum.AVATAR_SPEAK_ENDED) {
+      this.emitDiagnostic({ event: SessionDiagnosticEvent.AVATAR_SPEAK_ENDED });
+    }
+  }
+
+  private getCommandKind(payload: object): AgentControlCommandKind {
+    const command = payload as { elevenlabs_event_type?: unknown };
+    if (command.elevenlabs_event_type === "contextual_update") {
+      return AgentControlCommandKind.CONTEXTUAL_UPDATE;
+    }
+    if (command.elevenlabs_event_type === "user_message") {
+      return AgentControlCommandKind.USER_MESSAGE;
+    }
+    return AgentControlCommandKind.OTHER;
+  }
+
+  private getElevenLabsResponseKind(
+    eventType: unknown,
+  ): ElevenLabsAgentResponseKind {
+    if (eventType === "conversation_initiation_metadata") {
+      return ElevenLabsAgentResponseKind.CONVERSATION_INITIATION_METADATA;
+    }
+    if (eventType === "contextual_update") {
+      return ElevenLabsAgentResponseKind.CONTEXTUAL_UPDATE;
+    }
+    if (eventType === "agent_response") {
+      return ElevenLabsAgentResponseKind.AGENT_RESPONSE;
+    }
+    return ElevenLabsAgentResponseKind.OTHER;
+  }
+
+  private emitDiagnostic(
+    entry: Omit<SessionDiagnosticEntry, "elapsedMs">,
+  ): void {
+    if (!this.config.onDiagnosticEvent) {
+      return;
+    }
+    try {
+      this.config.onDiagnosticEvent({
+        ...entry,
+        elapsedMs: Math.max(0, Date.now() - this.diagnosticStartedAt),
+      });
+    } catch {
+      // Observability must remain passive even if consumer code fails.
+    }
   }
 
   protected generateEventId(): string {

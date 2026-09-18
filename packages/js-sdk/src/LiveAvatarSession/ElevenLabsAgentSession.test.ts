@@ -3,8 +3,18 @@ import {
   ElevenLabsAgentSession,
   ElevenLabsAgentSessionError,
 } from "./ElevenLabsAgentSession";
-import { AgentType, SessionInfo } from "./types";
-import { CommandEventsEnum, ElevenLabsAgentCommandType } from "./events";
+import {
+  AgentControlCommandKind,
+  AgentType,
+  ElevenLabsAgentResponseKind,
+  SessionDiagnosticEvent,
+  SessionInfo,
+} from "./types";
+import {
+  AgentEventsEnum,
+  CommandEventsEnum,
+  ElevenLabsAgentCommandType,
+} from "./events";
 import { LIVEKIT_COMMAND_CHANNEL_TOPIC } from "../const";
 import { mockFetch } from "../test/utils/mockFetch";
 import { testContext } from "../test/utils/testContext";
@@ -189,5 +199,150 @@ describe("ElevenLabsAgentSession command publishing", () => {
     expect(() => session.repeatAudio("hi")).toThrow(
       ElevenLabsAgentSessionError,
     );
+  });
+});
+
+describe("ElevenLabsAgentSession passive startup diagnostics", () => {
+  it("observes local publish settlement and rejection without changing synchronous commands", async () => {
+    const diagnostics: Array<{ event: SessionDiagnosticEvent; commandKind?: AgentControlCommandKind }> = [];
+    const session = new ElevenLabsAgentSession(elevenLabsToken, {
+      onDiagnosticEvent: (entry) => diagnostics.push(entry),
+    });
+    testContext.sessionId = sessionInfoMock.session_id;
+    mockFetch(
+      {
+        url: "/v1/sessions/start",
+        method: "POST",
+        response: { data: sessionInfoMock, code: 1000 },
+      },
+      {
+        url: "/v1/sessions/stop",
+        method: "POST",
+        response: { code: 1000 },
+      },
+    );
+    await session.start();
+    const publishData = (session as any).room.localParticipant
+      .publishData as ReturnType<typeof vi.fn>;
+
+    publishData.mockImplementationOnce(() => Promise.resolve());
+    session.sendUserMessage("not logged");
+    await Promise.resolve();
+
+    publishData.mockImplementationOnce(() => Promise.reject(new Error("secret")));
+    session.sendContextualUpdate("not logged");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    publishData.mockImplementationOnce(() => {
+      throw new Error("secret");
+    });
+    expect(() => session.sendUserMessage("not logged")).toThrow("secret");
+
+    expect(diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ event: SessionDiagnosticEvent.ROOM_CONNECTED }),
+        expect.objectContaining({
+          event: SessionDiagnosticEvent.AGENT_CONTROL_PUBLISH_SETTLED,
+          commandKind: AgentControlCommandKind.USER_MESSAGE,
+        }),
+        expect.objectContaining({
+          event: SessionDiagnosticEvent.AGENT_CONTROL_PUBLISH_REJECTED,
+          commandKind: AgentControlCommandKind.CONTEXTUAL_UPDATE,
+        }),
+        expect.objectContaining({
+          event: SessionDiagnosticEvent.AGENT_CONTROL_PUBLISH_REJECTED,
+          commandKind: AgentControlCommandKind.USER_MESSAGE,
+        }),
+      ]),
+    );
+  });
+
+  it("observes an allowlisted ElevenLabs event before app listeners without exposing its payload", async () => {
+    const diagnostics: Array<{
+      event: SessionDiagnosticEvent;
+      elevenLabsResponseKind?: ElevenLabsAgentResponseKind;
+    }> = [];
+    const session = setupSession(elevenLabsToken);
+    (session as any).config.onDiagnosticEvent = (entry: any) => diagnostics.push(entry);
+    await session.start();
+
+    testContext.roomInstance._triggerDataReceived({
+      event_id: "sensitive-event-id",
+      event_type: AgentEventsEnum.ELEVENLABS_AGENT_EVENT,
+      elevenlabs_event_type: "conversation_initiation_metadata",
+      data: { conversation_id: "sensitive-conversation-id", extra: "secret" },
+    });
+
+    expect(diagnostics).toContainEqual({
+      event: SessionDiagnosticEvent.ELEVENLABS_AGENT_EVENT_RECEIVED,
+      elapsedMs: expect.any(Number),
+      elevenLabsResponseKind:
+        ElevenLabsAgentResponseKind.CONVERSATION_INITIATION_METADATA,
+    });
+  });
+
+  it("ignores a throwing observer", async () => {
+    const session = new ElevenLabsAgentSession(elevenLabsToken, {
+      onDiagnosticEvent: () => {
+        throw new Error("observer failure");
+      },
+    });
+    testContext.sessionId = sessionInfoMock.session_id;
+    mockFetch(
+      {
+        url: "/v1/sessions/start",
+        method: "POST",
+        response: { data: sessionInfoMock, code: 1000 },
+      },
+      { url: "/v1/sessions/stop", method: "POST", response: { code: 1000 } },
+    );
+    await expect(session.start()).resolves.toBeUndefined();
+    expect(() => session.sendUserMessage("not logged")).not.toThrow();
+  });
+
+  it("emits the central terminal signal once for manual stop", async () => {
+    const diagnostics: SessionDiagnosticEvent[] = [];
+    const session = new ElevenLabsAgentSession(elevenLabsToken, {
+      onDiagnosticEvent: (entry) => diagnostics.push(entry.event),
+    });
+    testContext.sessionId = sessionInfoMock.session_id;
+    mockFetch(
+      {
+        url: "/v1/sessions/start",
+        method: "POST",
+        response: { data: sessionInfoMock, code: 1000 },
+      },
+      { url: "/v1/sessions/stop", method: "POST", response: { code: 1000 } },
+    );
+    await session.start();
+    await session.stop();
+
+    expect(
+      diagnostics.filter((event) => event === SessionDiagnosticEvent.SESSION_ENDED),
+    ).toHaveLength(1);
+  });
+
+  it("emits the central terminal signal once when start fails even if the observer throws", async () => {
+    const diagnostics: SessionDiagnosticEvent[] = [];
+    mockFetch(
+      {
+        url: "/v1/sessions/start",
+        method: "POST",
+        response: { code: 4000, message: "start failed" },
+      },
+      { url: "/v1/sessions/stop", method: "POST", response: { code: 1000 } },
+    );
+    const session = new ElevenLabsAgentSession(elevenLabsToken, {
+      onDiagnosticEvent: (entry) => {
+        diagnostics.push(entry.event);
+        throw new Error("observer failure");
+      },
+    });
+
+    await expect(session.start()).rejects.toBeDefined();
+    expect(
+      diagnostics.filter((event) => event === SessionDiagnosticEvent.SESSION_ENDED),
+    ).toHaveLength(1);
   });
 });

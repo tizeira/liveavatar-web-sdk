@@ -19,6 +19,7 @@ import { LiveAvatarSessionMessage, CustomerData, WidgetState } from "./types";
 import { API_URL } from "../../app/api/secrets";
 import {
   ClaraStartupDiagnostics,
+  logClaraStartupDiagnostic,
   shouldEnableClaraStartupDiagnostics,
 } from "./startup-diagnostics";
 
@@ -226,14 +227,15 @@ export const LiveAvatarContextProvider = ({
           ? { state: session.voiceChat.state, muted: session.voiceChat.isMuted }
           : null;
       },
-      log: (record) => console.info("[CLARA_STARTUP]", record),
+      log: logClaraStartupDiagnostic,
     });
   }
   if (!sessionRef.current) {
     sessionRef.current = new ElevenLabsAgentSession(sessionAccessToken, {
       voiceChat: true,
       apiUrl: API_URL,
-      onDiagnosticEvent: (entry) => startupDiagnosticsRef.current?.observe(entry),
+      onDiagnosticEvent: (entry) =>
+        startupDiagnosticsRef.current?.observe(entry),
     });
   }
 

@@ -50,7 +50,10 @@ export type ClaraStartupDiagnosticsOptions = {
  */
 export class ClaraStartupDiagnostics {
   private readonly now: () => number;
-  private readonly setTimer: (callback: () => void, delayMs: number) => TimerHandle;
+  private readonly setTimer: (
+    callback: () => void,
+    delayMs: number,
+  ) => TimerHandle;
   private readonly clearTimer: (timer: TimerHandle) => void;
   private readonly startedAt: number;
   private readonly seen = new Set<string>();
@@ -67,8 +70,10 @@ export class ClaraStartupDiagnostics {
 
   constructor(private readonly options: ClaraStartupDiagnosticsOptions) {
     this.now = options.now ?? Date.now;
-    this.setTimer = options.setTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs));
-    this.clearTimer = options.clearTimer ?? clearTimeout;
+    this.setTimer =
+      options.setTimer ??
+      ((callback, delayMs) => setTimeout(callback, delayMs));
+    this.clearTimer = options.clearTimer ?? ((timer) => clearTimeout(timer));
     this.startedAt = this.now();
   }
 
@@ -184,7 +189,8 @@ export class ClaraStartupDiagnostics {
   }
 
   private record(record: Omit<ClaraStartupDiagnosticRecord, "sequence">): void {
-    if (this.disposed || this.suspended || !isStartupEvent(record.event)) return;
+    if (this.disposed || this.suspended || !isStartupEvent(record.event))
+      return;
     const event = record.event;
     const key = [
       event,
@@ -197,7 +203,10 @@ export class ClaraStartupDiagnostics {
       event === SessionDiagnosticEvent.SESSION_STOPPED ||
       event === SessionDiagnosticEvent.ROOM_DISCONNECTED ||
       event === SessionDiagnosticEvent.SESSION_ENDED;
-    if ((this.seen.size >= MAX_STARTUP_DIAGNOSTICS && !terminal) || this.seen.has(key)) {
+    if (
+      (this.seen.size >= MAX_STARTUP_DIAGNOSTICS && !terminal) ||
+      this.seen.has(key)
+    ) {
       return;
     }
     this.seen.add(key);
@@ -225,7 +234,9 @@ export class ClaraStartupDiagnostics {
             ...(isVoiceChatState(voiceChat.state)
               ? { voiceChatState: voiceChat.state }
               : {}),
-            ...(typeof voiceChat.muted === "boolean" ? { muted: voiceChat.muted } : {}),
+            ...(typeof voiceChat.muted === "boolean"
+              ? { muted: voiceChat.muted }
+              : {}),
           }
         : {}),
     };
@@ -235,6 +246,12 @@ export class ClaraStartupDiagnostics {
       // Console/reporting failures are intentionally ignored.
     }
   }
+}
+
+export function logClaraStartupDiagnostic(
+  record: ClaraStartupDiagnosticRecord,
+): void {
+  console.info(`[CLARA_STARTUP] ${JSON.stringify(record)}`);
 }
 
 export function shouldEnableClaraStartupDiagnostics(input?: {
@@ -257,7 +274,9 @@ export function shouldEnableClaraStartupDiagnostics(input?: {
 
 function isStartupEvent(value: unknown): value is StartupEvent {
   return (
-    Object.values(SessionDiagnosticEvent).includes(value as SessionDiagnosticEvent) ||
+    Object.values(SessionDiagnosticEvent).includes(
+      value as SessionDiagnosticEvent,
+    ) ||
     Object.values(ClaraStartupDiagnosticEvent).includes(
       value as ClaraStartupDiagnosticEvent,
     )

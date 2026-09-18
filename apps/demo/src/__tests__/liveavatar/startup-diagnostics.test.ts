@@ -8,12 +8,69 @@ import {
 import {
   ClaraStartupDiagnosticEvent,
   ClaraStartupDiagnostics,
+  logClaraStartupDiagnostic,
   shouldEnableClaraStartupDiagnostics,
   STARTUP_GREETING_TIMEOUT_MS,
   STARTUP_METADATA_TIMEOUT_MS,
 } from "@/src/liveavatar/startup-diagnostics";
 
 describe("ClaraStartupDiagnostics", () => {
+  it("cancels browser timers without binding clearTimeout to the observer", () => {
+    vi.useFakeTimers();
+    const originalClear = globalThis.clearTimeout;
+    const clear = vi
+      .spyOn(globalThis, "clearTimeout")
+      .mockImplementation(function (this: unknown, timer) {
+        if (this !== undefined && this !== globalThis)
+          throw new TypeError("Illegal invocation");
+        return originalClear(timer);
+      });
+    try {
+      const diagnostics = new ClaraStartupDiagnostics({ enabled: true });
+      diagnostics.observe({
+        event: SessionDiagnosticEvent.ROOM_CONNECTED,
+        elapsedMs: 0,
+      });
+      diagnostics.observe({
+        event: SessionDiagnosticEvent.AGENT_CONTROL_PUBLISH_ATTEMPTED,
+        elapsedMs: 1,
+        commandKind: AgentControlCommandKind.USER_MESSAGE,
+      });
+      expect(() => diagnostics.dispose()).not.toThrow();
+      expect(clear).toHaveBeenCalledTimes(2);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      clear.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("writes the sanitized record as one readable console string", () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      const diagnostics = new ClaraStartupDiagnostics({
+        enabled: true,
+        log: logClaraStartupDiagnostic,
+      });
+      diagnostics.observe({
+        event: SessionDiagnosticEvent.SESSION_ENDED,
+        elapsedMs: 12,
+        secret: "must-not-log",
+      } as unknown as Parameters<ClaraStartupDiagnostics["observe"]>[0]);
+      expect(info).toHaveBeenCalledTimes(1);
+      expect(info.mock.calls[0]).toHaveLength(1);
+      const line = info.mock.calls[0]![0] as string;
+      expect(JSON.parse(line.replace("[CLARA_STARTUP] ", ""))).toEqual({
+        event: "session_ended",
+        elapsedMs: 12,
+        sequence: 1,
+      });
+      expect(line).not.toContain("must-not-log");
+    } finally {
+      info.mockRestore();
+    }
+  });
+
   it("records metadata before the greeting attempt and clears both timeouts on evidence", () => {
     vi.useFakeTimers();
     const log = vi.fn();
@@ -42,7 +99,9 @@ describe("ClaraStartupDiagnostics", () => {
       event: SessionDiagnosticEvent.AVATAR_SPEAK_STARTED,
       elapsedMs: 13,
     });
-    vi.advanceTimersByTime(STARTUP_GREETING_TIMEOUT_MS + STARTUP_METADATA_TIMEOUT_MS);
+    vi.advanceTimersByTime(
+      STARTUP_GREETING_TIMEOUT_MS + STARTUP_METADATA_TIMEOUT_MS,
+    );
 
     expect(log).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -108,7 +167,9 @@ describe("ClaraStartupDiagnostics", () => {
       elapsedMs: 0,
     });
     diagnostics.dispose();
-    vi.advanceTimersByTime(STARTUP_GREETING_TIMEOUT_MS + STARTUP_METADATA_TIMEOUT_MS);
+    vi.advanceTimersByTime(
+      STARTUP_GREETING_TIMEOUT_MS + STARTUP_METADATA_TIMEOUT_MS,
+    );
     diagnostics.observe({
       event: "malicious-event" as SessionDiagnosticEvent,
       elapsedMs: Number.NaN,
@@ -143,7 +204,9 @@ describe("ClaraStartupDiagnostics", () => {
       elapsedMs: 4,
       commandKind: AgentControlCommandKind.USER_MESSAGE,
     });
-    vi.advanceTimersByTime(STARTUP_GREETING_TIMEOUT_MS + STARTUP_METADATA_TIMEOUT_MS);
+    vi.advanceTimersByTime(
+      STARTUP_GREETING_TIMEOUT_MS + STARTUP_METADATA_TIMEOUT_MS,
+    );
 
     expect(log).not.toHaveBeenCalledWith(
       expect.objectContaining({
@@ -185,7 +248,9 @@ describe("ClaraStartupDiagnostics", () => {
       event: SessionDiagnosticEvent.AVATAR_SPEAK_STARTED,
       elapsedMs: 5,
     });
-    vi.advanceTimersByTime(STARTUP_GREETING_TIMEOUT_MS + STARTUP_METADATA_TIMEOUT_MS);
+    vi.advanceTimersByTime(
+      STARTUP_GREETING_TIMEOUT_MS + STARTUP_METADATA_TIMEOUT_MS,
+    );
 
     expect(log).toHaveBeenCalledTimes(3);
     expect(JSON.stringify(log.mock.calls)).not.toContain("customer secret");
@@ -213,7 +278,9 @@ describe("ClaraStartupDiagnostics", () => {
     ).not.toThrow();
     diagnostics.suspend();
     diagnostics.resume();
-    expect(() => vi.advanceTimersByTime(STARTUP_METADATA_TIMEOUT_MS)).not.toThrow();
+    expect(() =>
+      vi.advanceTimersByTime(STARTUP_METADATA_TIMEOUT_MS),
+    ).not.toThrow();
     vi.useRealTimers();
   });
 });
@@ -236,8 +303,8 @@ describe("shouldEnableClaraStartupDiagnostics", () => {
         vercelEnv: "preview",
       }),
     ).toBe(true);
-    expect(shouldEnableClaraStartupDiagnostics({ nodeEnv: "development" })).toBe(
-      true,
-    );
+    expect(
+      shouldEnableClaraStartupDiagnostics({ nodeEnv: "development" }),
+    ).toBe(true);
   });
 });

@@ -40,7 +40,7 @@ function toResult(consultation: {
   return {
     consultationId: consultation.id,
     status: consultation.status,
-    summary: consultation.summary,
+    summary: sanitizeUserFacingSummary(consultation.summary) || null,
     routine: consultation.routine as ClaraRoutine | null,
     transcript: (consultation.transcript || []) as ClaraTranscriptTurn[],
   };
@@ -79,7 +79,7 @@ export async function saveClaraRoutine(
     const updated = await tx.claraConsultation.update({
       where: { id: consultationId },
       data: {
-        summary,
+        summary: sanitizeUserFacingSummary(summary),
         routine: routine as unknown as Prisma.InputJsonValue,
         status:
           existing.status === ClaraConsultationStatus.completed
@@ -136,7 +136,11 @@ export async function completeClaraConsultation(input: {
         transcript: input.transcript,
         analysisMetrics:
           input.analysisMetrics as unknown as Prisma.InputJsonValue,
-        summary: input.summary || undefined,
+        // A successful tool write owns its summary; post-call prose must not
+        // overwrite it or manufacture a persisted routine from spoken claims.
+        summary: existing.routine
+          ? undefined
+          : sanitizeUserFacingSummary(input.summary) || undefined,
         status: ClaraConsultationStatus.completed,
         completedAt,
         transcriptExpiresAt: addDays(completedAt, TRANSCRIPT_RETENTION_DAYS),

@@ -2,6 +2,28 @@ import { describe, expect, it } from "vitest";
 import { sanitizeUserFacingSummary } from "@/src/consultations/privacy";
 
 describe("sanitizeUserFacingSummary", () => {
+  it("preserves product storage instructions", () => {
+    const advice = "En tu rutina, guardá el sérum lejos de la luz.";
+    expect(sanitizeUserFacingSummary(advice)).toBe(advice);
+  });
+  it("removes unsupported persistence claims while preserving consultation content", () => {
+    expect(
+      sanitizeUserFacingSummary(
+        "Acordamos usar Beta Hidra. Tu rutina ha sido guardada con éxito.",
+      ),
+    ).toBe("Acordamos usar Beta Hidra.");
+    expect(
+      sanitizeUserFacingSummary(
+        "La rutina quedó registrada. Buscás hidratación.",
+      ),
+    ).toBe("Buscás hidratación.");
+    expect(
+      sanitizeUserFacingSummary(
+        "Ya la he guardado. Tu rutina fue actualizada hoy.",
+      ),
+    ).toBe("");
+  });
+
   it("removes a customer name after a role label", () => {
     expect(
       sanitizeUserFacingSummary(

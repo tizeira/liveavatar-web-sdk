@@ -61,13 +61,24 @@ describe("Clara buyer access", () => {
   });
 
   it("rejects modified and expired tickets", async () => {
-    const freshToken = await access.issueClaraBuyerTicket(ticket());
-    const modified = `${freshToken.slice(0, -1)}${freshToken.endsWith("a") ? "b" : "a"}`;
-    await expect(access.readClaraBuyerTicket(modified)).resolves.toBeNull();
+    const now = 1_789_742_918;
+    const freshToken = await access.issueClaraBuyerTicket(ticket(now));
+    // Mutate authenticated bytes, not unused base64 padding bits.
+    const parts = freshToken.split(".");
+    const tag = Buffer.from(parts[3]!, "base64url");
+    tag[0] = tag[0]! ^ 1;
+    parts[3] = tag.toString("base64url");
+    const modified = parts.join(".");
+    await expect(
+      access.readClaraBuyerTicket(modified, "shopify-test-secret", now),
+    ).resolves.toBeNull();
 
-    const oldIssuedAt = Math.floor(Date.now() / 1000) - 7201;
-    const expired = await access.issueClaraBuyerTicket(ticket(oldIssuedAt));
-    await expect(access.readClaraBuyerTicket(expired)).resolves.toBeNull();
+    const expired = await access.issueClaraBuyerTicket(
+      ticket(now - access.CLARA_BUYER_TICKET_TTL_SECONDS),
+    );
+    await expect(
+      access.readClaraBuyerTicket(expired, "shopify-test-secret", now),
+    ).resolves.toBeNull();
   });
 
   it("atomically reserves a consultation and reports remaining starts", async () => {

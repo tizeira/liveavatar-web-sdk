@@ -30,6 +30,7 @@ import type {
   ClaraConversationMemory,
 } from "../consultations/types";
 import type { ClaraCatalogProduct } from "../shopify/types";
+import { routineGoalsText } from "../consultations/routine";
 import styles from "./ClaraVoiceAgent.module.css";
 
 // Debug (solo preview/develop)
@@ -57,6 +58,17 @@ import { toast } from "sonner";
 // Set to true to show debug UI (Test Agent button, Mic Status button, MobileLogger).
 // Keep false in production. Diagnostic event logging in console stays regardless.
 const DEBUG_UI = false;
+
+type SafeClientTelemetryEvent =
+  | "voicechat_state_observed"
+  | "voicechat_ready"
+  | "voicechat_prepare_failed"
+  | "greeting_triggered"
+  | "greeting_trigger_failed"
+  | "greeting_completed"
+  | "microphone_ready"
+  | "microphone_unmute_failed"
+  | "agent_event_observed";
 
 // ============================================
 // SESSION LIMIT CONFIGURATION
@@ -240,8 +252,8 @@ const LandingScreen: React.FC<LandingScreenProps> = ({
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       stream.getTracks().forEach((track) => track.stop());
       await onStartCall();
-    } catch (permissionError) {
-      console.warn("[MIC] Permission request failed", permissionError);
+    } catch {
+      console.warn("[MIC] Permission request failed");
       setPermissionDenied(true);
     }
   };
@@ -508,10 +520,13 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
   // Track if customer context has been sent (one-time per session)
   const hasSentContextRef = useRef(false);
 
-  // === SERVER LOG RELAY (mobile debugging) ===
-  // Send critical client-side logs to /api/client-log so they appear in Vercel Runtime Logs
+  // === SAFE CLIENT TELEMETRY (non-production only) ===
+  // Send only allowlisted event names; never send conversational or provider payloads.
   const sendServerLog = useCallback(
-    (message: string, level: "info" | "warn" | "error" = "info") => {
+    (
+      event: SafeClientTelemetryEvent,
+      level: "info" | "warn" | "error" = "info",
+    ) => {
       // NEXT_PUBLIC_VERCEL_ENV is available client-side; skip only in actual production
       if (process.env.NEXT_PUBLIC_VERCEL_ENV === "production") return;
       const device = isDesktop ? "desktop" : "mobile";
@@ -519,7 +534,9 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          logs: [{ message, level, device, ts: Date.now() }],
+          event,
+          level,
+          device,
         }),
       }).catch(() => {}); // Fire and forget
     },
@@ -553,10 +570,8 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
       const vcState = session.voiceChat.state;
       const vcMuted = session.voiceChat.isMuted;
 
-      console.log(`[PLUGIN] voiceChat state="${vcState}", isMuted=${vcMuted}`);
-      sendServerLog(
-        `[PLUGIN] voiceChat state="${vcState}", isMuted=${vcMuted}`,
-      );
+      console.info("[PLUGIN] voiceChat state observed");
+      sendServerLog("voicechat_state_observed");
 
       try {
         // Force-mute during greeting so ambient sound can't trigger an interrupt.
@@ -576,12 +591,12 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
           );
         }
 
-        console.log("[PLUGIN] VoiceChat ACTIVE and ready for greeting");
-        sendServerLog("[PLUGIN] VoiceChat ACTIVE and ready for greeting");
+        console.info("[PLUGIN] VoiceChat ready for greeting");
+        sendServerLog("voicechat_ready");
         setIsVoiceChatReady(true);
-      } catch (err) {
-        console.error("[PLUGIN] voiceChat preparation failed:", err);
-        sendServerLog(`[PLUGIN] VoiceChat preparation failed: ${err}`, "error");
+      } catch {
+        console.error("[PLUGIN] voiceChat preparation failed");
+        sendServerLog("voicechat_prepare_failed", "error");
         hasStartedVoiceChatRef.current = false;
         if (!cancelled) {
           toast.error("No pudimos activar el micrófono", {
@@ -625,13 +640,7 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
     if (hasSentContextRef.current) return;
     hasSentContextRef.current = true;
 
-    const firstName = customerData?.firstName;
-    console.log(
-      `[PLUGIN] Sending context + greeting trigger (firstName=${firstName || "none"})`,
-    );
-    sendServerLog(
-      `[PLUGIN] Init greeting for ${firstName || "anonymous user"}`,
-    );
+    console.info("[PLUGIN] Sending context and greeting trigger");
 
     // 2a. Silent customer info — no response triggered
     sendCustomerContext(session, {
@@ -648,12 +657,12 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
     // "Hola" simulates a user message — invisible in our UI but visible in EL logs.
     const triggerTimer = setTimeout(() => {
       try {
-        console.log("[PLUGIN] Sending trigger user_message to start greeting");
-        sendServerLog("[PLUGIN] Sending greeting trigger");
+        console.info("[PLUGIN] Sending greeting trigger");
+        sendServerLog("greeting_triggered");
         session.sendUserMessage("[START]");
-      } catch (err) {
-        console.error("[PLUGIN] sendUserMessage trigger failed:", err);
-        sendServerLog(`[PLUGIN] Trigger failed: ${err}`, "error");
+      } catch {
+        console.error("[PLUGIN] greeting trigger failed");
+        sendServerLog("greeting_trigger_failed", "error");
       }
     }, 150);
 
@@ -672,8 +681,8 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
     const onGreetingFinished = async () => {
       if (hasUnmutedAfterGreetingRef.current) return;
       hasUnmutedAfterGreetingRef.current = true;
-      console.log("[PLUGIN] Greeting ended — unmuting mic for user input");
-      sendServerLog("[PLUGIN] Greeting done, unmuting mic");
+      console.info("[PLUGIN] Greeting completed");
+      sendServerLog("greeting_completed");
 
       try {
         if (session.voiceChat.state !== VoiceChatState.ACTIVE) {
@@ -687,11 +696,11 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
           throw new Error("VoiceChat remained muted after unmute()");
         }
 
-        console.log("[PLUGIN] Mic ACTIVE for user input");
-        sendServerLog("[PLUGIN] Mic ACTIVE for user input");
-      } catch (err) {
-        console.error("[PLUGIN] Unmute after greeting failed:", err);
-        sendServerLog(`[PLUGIN] Unmute failed: ${err}`, "error");
+        console.info("[PLUGIN] Microphone ready for user input");
+        sendServerLog("microphone_ready");
+      } catch {
+        console.error("[PLUGIN] Microphone unmute failed");
+        sendServerLog("microphone_unmute_failed", "error");
         toast.error("El micrófono sigue silenciado", {
           description: "Tocá el botón del micrófono para activarlo.",
         });
@@ -706,20 +715,6 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // === DIAGNOSTIC: Periodic mic state monitoring ===
-  useEffect(() => {
-    const session = sessionRef.current;
-    if (!isStreamReady || !session) return;
-
-    const diagInterval = setInterval(() => {
-      const vc = session.voiceChat;
-      console.log(`[DIAG] voiceChat: state=${vc.state}, isMuted=${vc.isMuted}`);
-    }, 10000); // Every 10s
-
-    return () => clearInterval(diagInterval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isStreamReady]);
-
   // === DIAGNOSTIC: Test ElevenLabs agent with text message ===
   const handleTestAgent = useCallback(() => {
     const session = sessionRef.current;
@@ -728,10 +723,10 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
       console.log("[DIAG] Sending test message via sendUserMessage...");
       session.sendUserMessage("Hola, me puedes escuchar?");
       console.log("[DIAG] sendUserMessage sent ✓");
-      sendServerLog("[DIAG] Test sendUserMessage sent");
-    } catch (err) {
-      console.error("[DIAG] sendUserMessage failed:", err);
-      sendServerLog(`[DIAG] sendUserMessage FAILED: ${err}`, "error");
+      sendServerLog("agent_event_observed");
+    } catch {
+      console.error("[DIAG] sendUserMessage failed");
+      sendServerLog("agent_event_observed", "error");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -741,14 +736,11 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
     const session = sessionRef.current;
     if (!session) return;
 
-    // Helper: log event to console + server
-    const logEvt = (tag: string, e?: unknown) => {
-      const summary =
-        e && typeof e === "object"
-          ? JSON.stringify(e).slice(0, 250)
-          : String(e ?? "");
-      console.log(`[EVT] ${tag}`, summary);
-      sendServerLog(`[EVT] ${tag} ${summary}`.slice(0, 200));
+    // Event names are useful for lifecycle diagnosis; event payloads can contain
+    // transcripts or identifiers and must not be logged client- or server-side.
+    const logEvt = (tag: string) => {
+      console.info(`[EVT] ${tag.slice(0, 64)}`);
+      sendServerLog("agent_event_observed");
     };
 
     // Listen for EVERY known AgentEventsEnum
@@ -757,36 +749,24 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
         AgentEventsEnum.ELEVENLABS_AGENT_EVENT,
         (e: unknown) => {
           const ev = e as Record<string, unknown>;
-          logEvt(`EL:${ev.elevenlabs_event_type}`, ev.data);
+          logEvt(`EL:${String(ev.elevenlabs_event_type || "unknown")}`);
         },
       ],
       [AgentEventsEnum.USER_SPEAK_STARTED, () => logEvt("USER_SPEAK_STARTED")],
       [AgentEventsEnum.USER_SPEAK_ENDED, () => logEvt("USER_SPEAK_ENDED")],
-      [
-        AgentEventsEnum.USER_TRANSCRIPTION,
-        (e: unknown) => logEvt("USER_TRANSCRIPTION", e),
-      ],
-      [
-        AgentEventsEnum.USER_TRANSCRIPTION_CHUNK,
-        (e: unknown) => logEvt("USER_TX_CHUNK", e),
-      ],
+      [AgentEventsEnum.USER_TRANSCRIPTION, () => logEvt("USER_TRANSCRIPTION")],
+      [AgentEventsEnum.USER_TRANSCRIPTION_CHUNK, () => logEvt("USER_TX_CHUNK")],
       [
         AgentEventsEnum.AVATAR_SPEAK_STARTED,
         () => logEvt("AVATAR_SPEAK_STARTED"),
       ],
       [AgentEventsEnum.AVATAR_SPEAK_ENDED, () => logEvt("AVATAR_SPEAK_ENDED")],
-      [
-        AgentEventsEnum.AVATAR_TRANSCRIPTION,
-        (e: unknown) => logEvt("AVATAR_TX", e),
-      ],
+      [AgentEventsEnum.AVATAR_TRANSCRIPTION, () => logEvt("AVATAR_TX")],
       [
         AgentEventsEnum.AVATAR_TRANSCRIPTION_CHUNK,
-        (e: unknown) => logEvt("AVATAR_TX_CHUNK", e),
+        () => logEvt("AVATAR_TX_CHUNK"),
       ],
-      [
-        AgentEventsEnum.SESSION_STOPPED,
-        (e: unknown) => logEvt("SESSION_STOPPED", e),
-      ],
+      [AgentEventsEnum.SESSION_STOPPED, () => logEvt("SESSION_STOPPED")],
     ];
 
     for (const [evt, handler] of handlers) {
@@ -806,16 +786,8 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
         !event.startsWith("session.state") &&
         !event.startsWith("voicechat")
       ) {
-        console.log(
-          `[EMIT] ${event}`,
-          args[0] ? JSON.stringify(args[0]).slice(0, 150) : "",
-        );
-        sendServerLog(
-          `[EMIT] ${event} ${args[0] ? JSON.stringify(args[0]).slice(0, 100) : ""}`.slice(
-            0,
-            200,
-          ),
-        );
+        console.info(`[EMIT] ${event.slice(0, 64)}`);
+        sendServerLog("agent_event_observed");
       }
       return origEmit(event, ...args);
     };
@@ -873,8 +845,8 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
         await session.voiceChat.mute();
         console.log("[VOICECHAT] Muted");
       }
-    } catch (err) {
-      console.error("[VOICECHAT] Toggle mute failed:", err);
+    } catch {
+      console.error("[VOICECHAT] Toggle mute failed");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isMuted]);
@@ -913,7 +885,7 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
       .catch((error: unknown) => {
         if (error instanceof DOMException && error.name === "AbortError")
           return;
-        console.error("[MEDIA_READY] readiness probe failed", error);
+        console.error("[MEDIA_READY] readiness probe failed");
         setIsMediaPlaybackReady(true);
       });
 
@@ -930,9 +902,7 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
         session
           .keepAlive()
           .then(() => console.log("[HEYGEN] Keep-alive sent"))
-          .catch((error: unknown) =>
-            console.warn("[HEYGEN] Keep-alive failed:", error),
-          );
+          .catch(() => console.warn("[HEYGEN] Keep-alive failed"));
       },
       5 * 60 * 1000,
     );
@@ -1291,11 +1261,7 @@ const SessionRecap: React.FC<SessionRecapProps> = ({
           <p className={styles.recapMeta}>Próximos pasos para tu consulta</p>
           <div className={styles.recapCard}>
             <div className={styles.eyebrow}>Objetivos conversados</div>
-            <p className={styles.recapText}>
-              {routine?.concerns.length
-                ? routine.concerns.join(" · ")
-                : "No se registraron objetivos suficientes para formar una rutina."}
-            </p>
+            <p className={styles.recapText}>{routineGoalsText(routine)}</p>
           </div>
           {routine?.steps.map((step, index) => (
             <div

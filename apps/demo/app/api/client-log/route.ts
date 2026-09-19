@@ -1,10 +1,25 @@
 /**
- * Client-side log relay — mobile clients POST logs here so they appear
- * in Vercel Runtime Logs (where we can actually read them).
+ * Client-side telemetry relay for non-production diagnostics.
  *
- * Only enabled in non-production environments.
+ * It accepts only a fixed event name. Conversation text, provider events,
+ * identifiers, and error bodies must never leave the browser through this
+ * endpoint.
  */
 import { NextRequest, NextResponse } from "next/server";
+
+const SAFE_CLIENT_EVENTS = new Set([
+  "voicechat_state_observed",
+  "voicechat_ready",
+  "voicechat_prepare_failed",
+  "greeting_triggered",
+  "greeting_trigger_failed",
+  "greeting_completed",
+  "microphone_ready",
+  "microphone_unmute_failed",
+  "agent_event_observed",
+]);
+
+const SAFE_DEVICES = new Set(["desktop", "mobile", "unknown"]);
 
 export async function POST(request: NextRequest) {
   // Only allow in preview/development (VERCEL_ENV distinguishes preview from production on Vercel)
@@ -14,30 +29,30 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const { logs } = await request.json();
+    const { event, level, device } = await request.json();
 
-    if (!Array.isArray(logs)) {
+    if (
+      typeof event !== "string" ||
+      !SAFE_CLIENT_EVENTS.has(event) ||
+      (device !== undefined &&
+        (typeof device !== "string" || !SAFE_DEVICES.has(device)))
+    ) {
       return NextResponse.json(
-        { error: "logs must be array" },
+        { error: "invalid telemetry event" },
         { status: 400 },
       );
     }
 
-    // Print each log line so it appears in Vercel Runtime Logs
-    for (const entry of logs.slice(0, 50)) {
-      const level = entry.level || "info";
-      const msg = `[CLIENT:${entry.device || "unknown"}] ${entry.message}`;
-
-      if (level === "error") {
-        console.error(msg);
-      } else if (level === "warn") {
-        console.warn(msg);
-      } else {
-        console.log(msg);
-      }
+    const message = `[CLIENT:${device || "unknown"}] ${event}`;
+    if (level === "error") {
+      console.error(message);
+    } else if (level === "warn") {
+      console.warn(message);
+    } else {
+      console.info(message);
     }
 
-    return NextResponse.json({ ok: true, received: logs.length });
+    return NextResponse.json({ ok: true });
   } catch {
     return NextResponse.json({ error: "invalid body" }, { status: 400 });
   }

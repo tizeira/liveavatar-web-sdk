@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { consolidateRoutineSteps } from "@/src/consultations/routine";
+import {
+  consolidateRoutineSteps,
+  routineGoalsText,
+} from "@/src/consultations/routine";
 import type { ClaraRoutineStep } from "@/src/consultations/types";
 
 const base = {
@@ -8,6 +11,42 @@ const base = {
   frequency: "Todos los días",
   product: null,
 } satisfies Omit<ClaraRoutineStep, "moment">;
+
+describe("routineGoalsText", () => {
+  it("does not deny an existing routine when objectives are absent", () => {
+    const routine = {
+      concerns: [],
+      steps: [
+        { ...base, moment: "morning" as const },
+        { ...base, moment: "evening" as const, order: 2 },
+      ],
+    };
+    const before = structuredClone(routine);
+    expect(routineGoalsText(routine)).toBe(
+      "No se registraron objetivos específicos.",
+    );
+    expect(routine).toEqual(before);
+  });
+  it("shows the recorded objectives without inventing new ones", () => {
+    expect(
+      routineGoalsText({
+        concerns: ["Hidratación", "Textura"],
+        steps: [{ ...base, moment: "morning" }],
+      }),
+    ).toBe("Hidratación · Textura");
+  });
+  it("reports missing routine only when there are no steps", () => {
+    for (const routine of [
+      null,
+      undefined,
+      { concerns: ["Hidratación"], steps: [] },
+    ]) {
+      expect(routineGoalsText(routine)).toBe(
+        "No se guardó una rutina en esta consulta.",
+      );
+    }
+  });
+});
 
 describe("consolidateRoutineSteps", () => {
   it("combines identical morning and evening steps", () => {

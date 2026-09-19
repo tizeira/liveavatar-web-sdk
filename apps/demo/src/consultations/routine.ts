@@ -1,4 +1,14 @@
-import type { ClaraRoutineStep } from "./types";
+import type { ClaraRoutine, ClaraRoutineStep } from "./types";
+
+export function routineGoalsText(
+  routine: Pick<ClaraRoutine, "concerns" | "steps"> | null | undefined,
+): string {
+  if (!routine?.steps.length)
+    return "No se guardó una rutina en esta consulta.";
+  return routine.concerns.length
+    ? routine.concerns.join(" · ")
+    : "No se registraron objetivos específicos.";
+}
 
 function normalized(value?: string): string {
   return (value || "").trim().replace(/\s+/g, " ").toLocaleLowerCase("es");

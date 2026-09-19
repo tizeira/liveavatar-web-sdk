@@ -1294,8 +1294,7 @@ export const SessionRecap: React.FC<SessionRecapProps> = ({
           </p>
           {savedRoutine && (
             <p className={styles.recapMeta}>
-              Consultar esta rutina no inicia una conversación. Los precios y la
-              disponibilidad actuales se confirman en la tienda.
+              Precio y disponibilidad: ver producto.
             </p>
           )}
           <div className={styles.recapCard}>
@@ -1323,9 +1322,6 @@ export const SessionRecap: React.FC<SessionRecapProps> = ({
               )}
               {step.product?.url && (
                 <RoutineProductCard product={step.product} />
-              )}
-              {savedRoutine && step.product?.description && (
-                <p className={styles.recapText}>{step.product.description}</p>
               )}
             </div>
           ))}

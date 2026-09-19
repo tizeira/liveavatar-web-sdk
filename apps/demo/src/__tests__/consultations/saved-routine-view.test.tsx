@@ -11,13 +11,27 @@ describe("saved routine presentation", () => {
         durationSeconds={0}
         savedRoutine={{
           concerns: ["Hidratación"],
-          cautions: [],
+          cautions: ["Evitar el contacto con los ojos"],
           steps: [
             {
               order: 1,
               moment: "morning_evening",
               instruction: "Aplicar sobre piel limpia",
-              product: null,
+              product: {
+                id: "test-product",
+                title: "Beta Hidra",
+                handle: "beta-hidra",
+                url: "https://betaskintech.com/products/beta-hidra",
+                imageUrl: null,
+                imageAlt: null,
+                availableForSale: true,
+                price: { amount: "29742", currencyCode: "CLP" },
+                compareAtPrice: null,
+                description:
+                  "Descripción extensa del catálogo que no debe ocupar la rutina.",
+                companionCondition: null,
+                companionProducts: [],
+              },
             },
           ],
         }}
@@ -31,6 +45,11 @@ describe("saved routine presentation", () => {
     expect(html).toContain("Aplicar sobre piel limpia");
     expect(html).toContain("19 de septiembre de 2026");
     expect(html).not.toContain("Rutina pendiente");
+    expect(html).toContain("Beta Hidra");
+    expect(html).toContain("Ver producto");
+    expect(html).toContain("Evitar el contacto con los ojos");
+    expect(html).not.toContain("Descripción extensa del catálogo");
+    expect(html).not.toContain("Consultar esta rutina no inicia");
   });
   it("offers saved routine access even when the new consultation has no routine", () => {
     const html = renderToStaticMarkup(

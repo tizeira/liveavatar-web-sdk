@@ -4,6 +4,7 @@ import type {
   ClaraConsultationResult,
   ClaraConversationMemory,
   ClaraRoutine,
+  ClaraSavedRoutine,
   ClaraTranscriptTurn,
 } from "./types";
 import { sanitizeUserFacingSummary } from "./privacy";
@@ -11,6 +12,7 @@ import { sanitizeUserFacingSummary } from "./privacy";
 const TRANSCRIPT_RETENTION_DAYS = 30;
 const RECORD_RETENTION_MONTHS = 12;
 const CLEANUP_BATCH_SIZE = 500;
+const SAVED_ROUTINE_BATCH_SIZE = 20;
 
 function addDays(date: Date, days: number): Date {
   const result = new Date(date);
@@ -206,6 +208,65 @@ export async function getLatestClaraConsultation(shopifyCustomerKey: string) {
     orderBy: [{ completedAt: "desc" }, { updatedAt: "desc" }],
   });
   return consultation ? toResult(consultation) : null;
+}
+
+function hasRoutineSteps(routine: Prisma.JsonValue | null): boolean {
+  if (
+    typeof routine !== "object" ||
+    routine === null ||
+    Array.isArray(routine)
+  ) {
+    return false;
+  }
+  const candidate = routine as {
+    concerns?: unknown;
+    cautions?: unknown;
+    steps?: unknown;
+  };
+  return (
+    Array.isArray(candidate.concerns) &&
+    candidate.concerns.every((concern) => typeof concern === "string") &&
+    Array.isArray(candidate.cautions) &&
+    candidate.cautions.every((caution) => typeof caution === "string") &&
+    Array.isArray(candidate.steps) &&
+    candidate.steps.length > 0
+  );
+}
+
+export async function getSavedClaraRoutine(
+  shopifyCustomerKey: string,
+): Promise<ClaraSavedRoutine> {
+  // Prisma's JSON filters can distinguish database null from JSON values, but
+  // cannot express a portable non-empty JSON array predicate. Scan bounded
+  // batches in deterministic creation order so a newer empty consultation
+  // cannot hide an older saved routine.
+  let cursor: string | undefined;
+  for (;;) {
+    const consultations = await prisma.claraConsultation.findMany({
+      where: {
+        shopifyCustomerKey,
+        recordExpiresAt: { gt: new Date() },
+        routine: { not: Prisma.DbNull },
+      },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: SAVED_ROUTINE_BATCH_SIZE,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      select: { id: true, createdAt: true, routine: true },
+    });
+    const consultation = consultations.find(({ routine }) =>
+      hasRoutineSteps(routine),
+    );
+    if (consultation) {
+      return {
+        routine: consultation.routine as unknown as ClaraRoutine,
+        consultationDate: consultation.createdAt.toISOString(),
+      };
+    }
+    if (consultations.length < SAVED_ROUTINE_BATCH_SIZE) {
+      return { routine: null, consultationDate: null };
+    }
+    cursor = consultations.at(-1)?.id;
+  }
 }
 
 export async function getRecentClaraConversationMemory(

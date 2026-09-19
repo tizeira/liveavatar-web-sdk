@@ -29,6 +29,11 @@ export type ClaraRoutine = {
   steps: ClaraRoutineStep[];
 };
 
+export type ClaraSavedRoutine = {
+  routine: ClaraRoutine | null;
+  consultationDate: string | null;
+};
+
 export type ClaraConsultationResult = {
   consultationId: string;
   status: "pending" | "routine_ready" | "completed" | "failed";

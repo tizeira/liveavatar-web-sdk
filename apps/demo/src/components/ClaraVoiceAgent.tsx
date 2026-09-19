@@ -26,12 +26,14 @@ import { waitForMediaPlaybackReady } from "../utils/media-playback-readiness";
 import { useChromaKey } from "../hooks/useChromaKey";
 import type { ChromaKeyConfig } from "../hooks/useChromaKey";
 import type {
+  ClaraRoutine,
   ClaraConsultationResult,
   ClaraConversationMemory,
 } from "../consultations/types";
 import type { ClaraCatalogProduct } from "../shopify/types";
 import { routineGoalsText } from "../consultations/routine";
 import styles from "./ClaraVoiceAgent.module.css";
+import { SavedRoutinePanel } from "./SavedRoutinePanel";
 
 // Debug (solo preview/develop)
 import { MobileLogger } from "./debug/MobileLogger";
@@ -226,6 +228,7 @@ const VoiceControls: React.FC<VoiceControlsProps> = ({
 // LANDING SCREEN COMPONENT (shadcn/ui redesign)
 // ============================================
 interface LandingScreenProps {
+  onViewSavedRoutine?: () => void;
   onStartCall: () => Promise<void>;
   isLoading: boolean;
   userName?: string | null;
@@ -235,6 +238,7 @@ interface LandingScreenProps {
 }
 
 const LandingScreen: React.FC<LandingScreenProps> = ({
+  onViewSavedRoutine,
   onStartCall,
   isLoading,
   userName,
@@ -275,7 +279,14 @@ const LandingScreen: React.FC<LandingScreenProps> = ({
         </button>
       )}
 
-      <main className={styles.centerContent}>
+      <main
+        className={styles.centerContent}
+        style={
+          !showPermission && onViewSavedRoutine
+            ? { paddingBottom: 200 }
+            : undefined
+        }
+      >
         {showPermission ? (
           <>
             <div
@@ -317,6 +328,16 @@ const LandingScreen: React.FC<LandingScreenProps> = ({
       </main>
 
       <div className={styles.bottomActions}>
+        {!showPermission && onViewSavedRoutine && (
+          <button
+            type="button"
+            className={styles.secondaryButton}
+            onClick={onViewSavedRoutine}
+            disabled={isLoading}
+          >
+            Mi rutina guardada
+          </button>
+        )}
         <button
           type="button"
           className={styles.primaryButton}
@@ -1194,6 +1215,9 @@ const RoutineProductCard: React.FC<{ product: ClaraCatalogProduct }> = ({
 };
 
 interface SessionRecapProps {
+  savedRoutine?: ClaraRoutine;
+  savedConsultationDate?: string | null;
+  onViewSavedRoutine?: () => void;
   view: RecapView;
   durationSeconds: number;
   customerData?: CustomerData | null;
@@ -1203,7 +1227,10 @@ interface SessionRecapProps {
   onTalkAgain: () => void;
 }
 
-const SessionRecap: React.FC<SessionRecapProps> = ({
+export const SessionRecap: React.FC<SessionRecapProps> = ({
+  savedRoutine,
+  savedConsultationDate,
+  onViewSavedRoutine,
   view,
   durationSeconds,
   customerData,
@@ -1239,7 +1266,7 @@ const SessionRecap: React.FC<SessionRecapProps> = ({
   }
 
   if (view === "routine") {
-    const routine = result?.routine;
+    const routine = savedRoutine || result?.routine;
     return (
       <div className={styles.recapScreen}>
         <div className={styles.recapInner}>
@@ -1247,7 +1274,7 @@ const SessionRecap: React.FC<SessionRecapProps> = ({
             type="button"
             className={styles.backButton}
             onClick={() => onViewChange("summary")}
-            aria-label="Volver al resumen"
+            aria-label={savedRoutine ? "Volver" : "Volver al resumen"}
           >
             <ChevronLeft size={20} />
           </button>
@@ -1256,9 +1283,21 @@ const SessionRecap: React.FC<SessionRecapProps> = ({
             className={`${styles.recapTitle} ${styles.display}`}
             style={{ marginTop: 28 }}
           >
-            Mi rutina
+            {savedRoutine ? "Mi rutina guardada" : "Mi rutina"}
           </h1>
-          <p className={styles.recapMeta}>Próximos pasos para tu consulta</p>
+          <p className={styles.recapMeta}>
+            {savedRoutine
+              ? savedConsultationDate
+                ? `Rutina de la consulta del ${new Intl.DateTimeFormat("es-AR", { timeZone: "America/Argentina/Buenos_Aires", dateStyle: "long" }).format(new Date(savedConsultationDate))}`
+                : "Tu última rutina guardada"
+              : "Próximos pasos para tu consulta"}
+          </p>
+          {savedRoutine && (
+            <p className={styles.recapMeta}>
+              Consultar esta rutina no inicia una conversación. Los precios y la
+              disponibilidad actuales se confirman en la tienda.
+            </p>
+          )}
           <div className={styles.recapCard}>
             <div className={styles.eyebrow}>Objetivos conversados</div>
             <p className={styles.recapText}>{routineGoalsText(routine)}</p>
@@ -1284,6 +1323,9 @@ const SessionRecap: React.FC<SessionRecapProps> = ({
               )}
               {step.product?.url && (
                 <RoutineProductCard product={step.product} />
+              )}
+              {savedRoutine && step.product?.description && (
+                <p className={styles.recapText}>{step.product.description}</p>
               )}
             </div>
           ))}
@@ -1329,10 +1371,10 @@ const SessionRecap: React.FC<SessionRecapProps> = ({
         )}
         {!hasRoutine && (
           <div className={styles.recapCard} role="status">
-            <div className={styles.eyebrow}>Rutina pendiente</div>
+            <div className={styles.eyebrow}>Rutina de esta consulta</div>
             <p className={styles.recapText}>
-              No se guardó una rutina en esta consulta. Podés hablar nuevamente
-              con Clara para revisarla y confirmarla.
+              Esta consulta no tiene una nueva rutina guardada. Si ya guardaste
+              una anteriormente, podés consultarla en «Mi rutina guardada».
             </p>
           </div>
         )}
@@ -1346,6 +1388,15 @@ const SessionRecap: React.FC<SessionRecapProps> = ({
           >
             {hasRoutine ? "Ver próximos pasos" : "Hablar nuevamente con Clara"}
           </button>
+          {onViewSavedRoutine && (
+            <button
+              type="button"
+              className={styles.secondaryButton}
+              onClick={onViewSavedRoutine}
+            >
+              Mi rutina guardada
+            </button>
+          )}
           <a
             className={styles.secondaryButton}
             href="https://betaskintech.com"
@@ -1409,6 +1460,7 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
   customerData = null,
   designPreview = null,
 }) => {
+  const [showSavedRoutine, setShowSavedRoutine] = useState(false);
   const [sessionToken, setSessionToken] = useState<string | null>(null);
   const [chromaKeyEnabled, setChromaKeyEnabled] = useState(false);
   const [chromaSettings, setChromaSettings] = useState<{
@@ -1763,7 +1815,24 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
       {/* MobileLogger: hidden unless DEBUG_UI=true */}
       {DEBUG_UI && <MobileLogger filter="" />}
 
-      {recapView ? (
+      {showSavedRoutine ? (
+        <SavedRoutinePanel
+          onBack={() => setShowSavedRoutine(false)}
+          renderRoutine={(saved) => (
+            <SessionRecap
+              view="routine"
+              durationSeconds={0}
+              savedRoutine={saved.routine!}
+              savedConsultationDate={saved.consultationDate}
+              onViewChange={() => setShowSavedRoutine(false)}
+              onTalkAgain={() => {
+                setShowSavedRoutine(false);
+                handleTalkAgain();
+              }}
+            />
+          )}
+        />
+      ) : recapView ? (
         <SessionRecap
           view={recapView}
           durationSeconds={completedSessionSeconds}
@@ -1772,6 +1841,7 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
           processingError={consultationProcessingError}
           onViewChange={setRecapView}
           onTalkAgain={handleTalkAgain}
+          onViewSavedRoutine={() => setShowSavedRoutine(true)}
         />
       ) : !sessionToken ? (
         <LandingScreen
@@ -1781,6 +1851,7 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
           customerData={customerData}
           isRateLimited={isRateLimited}
           rateLimitCountdown={rateLimitCountdown}
+          onViewSavedRoutine={() => setShowSavedRoutine(true)}
         />
       ) : (
         <LiveAvatarContextProvider

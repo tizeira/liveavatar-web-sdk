@@ -45,6 +45,11 @@ El preflight no toma estas casillas del runbook como aprobación permanente. Req
   "commitSha": "SHA_COMPLETO_DEL_COMMIT",
   "verifiedAt": "2026-09-18T00:00:00Z",
   "gates": {
+    "databaseIsolation": false,
+    "providerProductionRouting": false,
+    "shopifyThemeBackup": false,
+    "shopifyProductionRouteReviewed": false,
+    "qaRecovery": false,
     "neonSnapshot": true,
     "prismaMigration": true,
     "previousVercelDeployment": true,
@@ -57,3 +62,5 @@ El preflight no toma estas casillas del runbook como aprobación permanente. Req
 ```
 
 No incluir secretos, URLs firmadas, cookies ni datos de clientes en ese archivo. Si cambia el commit, generar y aprobar evidencia nueva; el preflight rechazará automáticamente evidencia de otro SHA.
+
+Las puertas adicionales requieren evidencia: aislamiento efectivo de destinos de datos; agente/tools/webhook destinados al entorno correcto; copia verificable de los dos archivos live; revisión de página/template/dominio/contrato v2 (no equivale al smoke posterior al despliegue); recuperación QA aprobada. Ninguna casilla del ejemplo es una aprobación. El smoke protegido de Producción se ejecuta después del despliegue autorizado y antes de cambiar CTAs, no se exige como hecho previo al primer despliegue.

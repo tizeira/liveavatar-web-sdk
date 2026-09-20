@@ -27,6 +27,11 @@ const REQUIRED_RUNBOOK_SECTIONS = [
 ];
 
 const REQUIRED_RELEASE_GATES = [
+  "databaseIsolation",
+  "providerProductionRouting",
+  "shopifyThemeBackup",
+  "shopifyProductionRouteReviewed",
+  "qaRecovery",
   "neonSnapshot",
   "prismaMigration",
   "previousVercelDeployment",

@@ -200,6 +200,9 @@ async function testDatabase(): Promise<ServiceResult> {
 }
 
 export async function GET() {
+  if ((process.env.VERCEL_ENV || process.env.NODE_ENV) === "production") {
+    return Response.json({ error: "Not available" }, { status: 404 });
+  }
   // Require auth
   const session = await auth();
   if (!session?.user) {

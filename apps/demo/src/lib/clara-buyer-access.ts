@@ -300,7 +300,23 @@ export async function releaseClaraBuyerSession(
       },
       data: { status: ClaraConsultationStatus.failed },
     });
-    return released.count === 1;
+    if (released.count === 1) return true;
+    // A repeated close is successful only when this buyer's consultation is
+    // already terminal; an unavailable database still returns false below.
+    const terminal = await prisma.claraConsultation.findFirst({
+      where: {
+        id: consultationId,
+        shopifyCustomerKey: buyerKey,
+        status: {
+          in: [
+            ClaraConsultationStatus.completed,
+            ClaraConsultationStatus.failed,
+          ],
+        },
+      },
+      select: { id: true },
+    });
+    return Boolean(terminal);
   } catch {
     return false;
   }

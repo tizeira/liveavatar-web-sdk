@@ -13,7 +13,15 @@ export async function POST(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const consultation = await getClaraConsultationAccessContext(id);
+  let consultation;
+  try {
+    consultation = await getClaraConsultationAccessContext(id);
+  } catch {
+    return NextResponse.json(
+      { released: false, error: "Release unavailable" },
+      { status: 503 },
+    );
+  }
   if (
     !consultation ||
     !verifyConsultationAccessToken(accessToken, consultation.accessTokenHash)
@@ -21,6 +29,15 @@ export async function POST(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  await releaseClaraBuyerSession(consultation.shopifyCustomerKey, id);
+  const released = await releaseClaraBuyerSession(
+    consultation.shopifyCustomerKey,
+    id,
+  );
+  if (!released) {
+    return NextResponse.json(
+      { released: false, error: "Release unavailable" },
+      { status: 503 },
+    );
+  }
   return NextResponse.json({ released: true });
 }

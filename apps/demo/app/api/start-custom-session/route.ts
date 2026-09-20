@@ -35,6 +35,37 @@ function identifierSuffix(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value.slice(-6) : null;
 }
 
+const PROVIDER_TIMEOUT_MS = 20_000;
+
+class ProviderTimeoutError extends Error {
+  constructor() {
+    super("Provider request timed out");
+    this.name = "ProviderTimeoutError";
+  }
+}
+
+function createProviderDeadline() {
+  const controller = new AbortController();
+  let timeoutId: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new ProviderTimeoutError());
+      controller.abort();
+    }, PROVIDER_TIMEOUT_MS);
+  });
+
+  return {
+    signal: controller.signal,
+    race<T>(operation: Promise<T>) {
+      return Promise.race([operation, timeout]);
+    },
+    cleanup() {
+      clearTimeout(timeoutId);
+      controller.abort();
+    },
+  };
+}
+
 export async function POST(request: NextRequest) {
   // === RATE LIMIT CHECK ===
   // Cast to NextRequest for rate limiting (headers are compatible)
@@ -216,131 +247,160 @@ export async function POST(request: NextRequest) {
   );
 
   try {
-    const heygenPayload = {
-      mode: "LITE",
-      avatar_id: avatarId,
-      elevenlabs_agent_config: {
-        secret_id: HEYGEN_ELEVENLABS_SECRET_ID,
-        agent_id: ELEVENLABS_AGENT_ID,
-        dynamic_variables: {
-          // Correlates the provider's post-call webhook with this browser
-          // session. The separate recap access token is never sent upstream.
-          consultation_id: consultationId,
+    const providerDeadline = createProviderDeadline();
+    try {
+      const heygenPayload = {
+        mode: "LITE",
+        avatar_id: avatarId,
+        elevenlabs_agent_config: {
+          secret_id: HEYGEN_ELEVENLABS_SECRET_ID,
+          agent_id: ELEVENLABS_AGENT_ID,
+          dynamic_variables: {
+            // Correlates the provider's post-call webhook with this browser
+            // session. The separate recap access token is never sent upstream.
+            consultation_id: consultationId,
+          },
         },
-      },
-    };
+      };
 
-    logger.debug(
-      "[HEYGEN] Request payload prepared",
-      {
-        mode: heygenPayload.mode,
-        avatarIdSuffix: identifierSuffix(avatarId),
-        agentIdSuffix: identifierSuffix(ELEVENLABS_AGENT_ID),
-        dynamicVariableNames: ["consultation_id"],
-      },
-      { route: "/api/start-custom-session" },
-    );
-
-    const res = await fetch(`${API_URL}/v1/sessions/token`, {
-      method: "POST",
-      headers: {
-        "X-API-KEY": API_KEY,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(heygenPayload),
-    });
-
-    if (!res.ok) {
-      let errorMessage = "Failed to retrieve session token";
-      let errorCode = "HEYGEN_UNKNOWN_ERROR";
-      let errorDetails: Record<string, unknown> = {};
-
-      try {
-        const errorData = await res.json();
-        errorDetails = errorData;
-
-        // Extract error message from various HeyGen response formats
-        if (errorData.data?.[0]?.message) {
-          errorMessage = errorData.data[0].message;
-        } else if (errorData.error) {
-          errorMessage =
-            typeof errorData.error === "string"
-              ? errorData.error
-              : JSON.stringify(errorData.error);
-        } else if (errorData.message) {
-          errorMessage = errorData.message;
-        }
-
-        // Detect specific error types for better diagnostics
-        const lowerMsg = errorMessage.toLowerCase();
-        if (lowerMsg.includes("subscription") || lowerMsg.includes("expired")) {
-          errorCode = "HEYGEN_SUBSCRIPTION_EXPIRED";
-        } else if (lowerMsg.includes("credit") || lowerMsg.includes("quota")) {
-          errorCode = "HEYGEN_QUOTA_EXCEEDED";
-        } else if (lowerMsg.includes("rate") || lowerMsg.includes("limit")) {
-          errorCode = "HEYGEN_RATE_LIMITED";
-        } else if (
-          lowerMsg.includes("avatar") ||
-          lowerMsg.includes("not found")
-        ) {
-          errorCode = "HEYGEN_AVATAR_NOT_FOUND";
-        } else if (
-          lowerMsg.includes("unauthorized") ||
-          lowerMsg.includes("invalid")
-        ) {
-          errorCode = "HEYGEN_UNAUTHORIZED";
-        } else if (res.status === 401 || res.status === 403) {
-          errorCode = "HEYGEN_AUTH_FAILED";
-        } else if (res.status === 402) {
-          errorCode = "HEYGEN_PAYMENT_REQUIRED";
-        }
-      } catch {
-        logger.warn("[HEYGEN] Could not parse error response body", null, {
-          route: "/api/start-custom-session",
-        });
-      }
-
-      logger.error(
-        `[HEYGEN] API Error: ${errorCode}`,
+      logger.debug(
+        "[HEYGEN] Request payload prepared",
         {
-          status: res.status,
-          statusText: res.statusText,
-          errorCode,
+          mode: heygenPayload.mode,
           avatarIdSuffix: identifierSuffix(avatarId),
-          errorDetailKeys: Object.keys(errorDetails),
+          agentIdSuffix: identifierSuffix(ELEVENLABS_AGENT_ID),
+          dynamicVariableNames: ["consultation_id"],
         },
         { route: "/api/start-custom-session" },
       );
 
+      const res = await providerDeadline.race(
+        fetch(`${API_URL}/v1/sessions/token`, {
+          method: "POST",
+          headers: {
+            "X-API-KEY": API_KEY,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(heygenPayload),
+          signal: providerDeadline.signal,
+        }),
+      );
+
+      if (!res.ok) {
+        let errorMessage = "Failed to retrieve session token";
+        let errorCode = "HEYGEN_UNKNOWN_ERROR";
+        let errorDetails: Record<string, unknown> = {};
+
+        try {
+          const errorData = await providerDeadline.race(res.json());
+          errorDetails = errorData;
+
+          // Extract error message from various HeyGen response formats
+          if (errorData.data?.[0]?.message) {
+            errorMessage = errorData.data[0].message;
+          } else if (errorData.error) {
+            errorMessage =
+              typeof errorData.error === "string"
+                ? errorData.error
+                : JSON.stringify(errorData.error);
+          } else if (errorData.message) {
+            errorMessage = errorData.message;
+          }
+
+          // Detect specific error types for better diagnostics
+          const lowerMsg = errorMessage.toLowerCase();
+          if (
+            lowerMsg.includes("subscription") ||
+            lowerMsg.includes("expired")
+          ) {
+            errorCode = "HEYGEN_SUBSCRIPTION_EXPIRED";
+          } else if (
+            lowerMsg.includes("credit") ||
+            lowerMsg.includes("quota")
+          ) {
+            errorCode = "HEYGEN_QUOTA_EXCEEDED";
+          } else if (lowerMsg.includes("rate") || lowerMsg.includes("limit")) {
+            errorCode = "HEYGEN_RATE_LIMITED";
+          } else if (
+            lowerMsg.includes("avatar") ||
+            lowerMsg.includes("not found")
+          ) {
+            errorCode = "HEYGEN_AVATAR_NOT_FOUND";
+          } else if (
+            lowerMsg.includes("unauthorized") ||
+            lowerMsg.includes("invalid")
+          ) {
+            errorCode = "HEYGEN_UNAUTHORIZED";
+          } else if (res.status === 401 || res.status === 403) {
+            errorCode = "HEYGEN_AUTH_FAILED";
+          } else if (res.status === 402) {
+            errorCode = "HEYGEN_PAYMENT_REQUIRED";
+          }
+        } catch (error) {
+          if (error instanceof ProviderTimeoutError) throw error;
+          logger.warn("[HEYGEN] Could not parse error response body", null, {
+            route: "/api/start-custom-session",
+          });
+        }
+
+        logger.error(
+          `[HEYGEN] API Error: ${errorCode}`,
+          {
+            status: res.status,
+            statusText: res.statusText,
+            errorCode,
+            avatarIdSuffix: identifierSuffix(avatarId),
+            errorDetailKeys: Object.keys(errorDetails),
+          },
+          { route: "/api/start-custom-session" },
+        );
+
+        await cancelReservation();
+        return new Response(
+          JSON.stringify({
+            error: errorMessage,
+            code: errorCode,
+            service: "heygen",
+          }),
+          {
+            status: res.status,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+
+      const data = await providerDeadline.race(res.json());
+      logger.info(
+        "[HEYGEN] Session created successfully",
+        {
+          sessionIdSuffix: identifierSuffix(data.data?.session_id),
+          hasToken: !!data.data?.session_token,
+        },
+        {
+          route: "/api/start-custom-session",
+        },
+      );
+
+      session_token = data.data.session_token;
+      session_id = data.data.session_id;
+    } finally {
+      providerDeadline.cleanup();
+    }
+  } catch (error: unknown) {
+    if (error instanceof ProviderTimeoutError) {
+      logger.warn("[HEYGEN] Provider session creation timed out", null, {
+        route: "/api/start-custom-session",
+      });
       await cancelReservation();
       return new Response(
         JSON.stringify({
-          error: errorMessage,
-          code: errorCode,
+          error: "La creación de la sesión demoró demasiado.",
+          code: "HEYGEN_TIMEOUT",
           service: "heygen",
         }),
-        {
-          status: res.status,
-          headers: { "Content-Type": "application/json" },
-        },
+        { status: 504, headers: { "Content-Type": "application/json" } },
       );
     }
-
-    const data = await res.json();
-    logger.info(
-      "[HEYGEN] Session created successfully",
-      {
-        sessionIdSuffix: identifierSuffix(data.data?.session_id),
-        hasToken: !!data.data?.session_token,
-      },
-      {
-        route: "/api/start-custom-session",
-      },
-    );
-
-    session_token = data.data.session_token;
-    session_id = data.data.session_id;
-  } catch (error: unknown) {
     const err = error as Error;
     const isNetworkError =
       err.message.includes("fetch") ||

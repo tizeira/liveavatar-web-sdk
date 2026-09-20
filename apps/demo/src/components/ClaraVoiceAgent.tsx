@@ -32,6 +32,7 @@ import type {
 } from "../consultations/types";
 import type { ClaraCatalogProduct } from "../shopify/types";
 import { routineGoalsText } from "../consultations/routine";
+import { releaseConsultation } from "../consultations/release";
 import styles from "./ClaraVoiceAgent.module.css";
 import { SavedRoutinePanel } from "./SavedRoutinePanel";
 
@@ -1629,16 +1630,15 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
     setSessionToken(null);
     setRecapView("preparing");
     if (consultationCredentials) {
-      void fetch(
-        `/api/consultations/${encodeURIComponent(consultationCredentials.id)}/release`,
-        {
-          method: "POST",
-          headers: {
-            "x-consultation-token": consultationCredentials.accessToken,
-          },
-          keepalive: true,
-        },
-      );
+      void releaseConsultation(
+        consultationCredentials.id,
+        consultationCredentials.accessToken,
+      ).then((released) => {
+        if (!released)
+          toast.error(
+            "No pudimos confirmar el cierre. Revisá tu conexión antes de volver a intentar.",
+          );
+      });
     }
   }, [consultationCredentials]);
 

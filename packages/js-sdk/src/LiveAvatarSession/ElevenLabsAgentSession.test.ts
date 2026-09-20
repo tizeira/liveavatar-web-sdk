@@ -7,14 +7,18 @@ import {
   AgentControlCommandKind,
   AgentType,
   ElevenLabsAgentResponseKind,
+  SessionDisconnectReason,
   SessionDiagnosticEvent,
   SessionInfo,
+  SessionState,
 } from "./types";
 import {
   AgentEventsEnum,
   CommandEventsEnum,
   ElevenLabsAgentCommandType,
+  SessionEvent,
 } from "./events";
+import { ConnectionState } from "livekit-client";
 import { LIVEKIT_COMMAND_CHANNEL_TOPIC } from "../const";
 import { mockFetch } from "../test/utils/mockFetch";
 import { testContext } from "../test/utils/testContext";
@@ -204,7 +208,10 @@ describe("ElevenLabsAgentSession command publishing", () => {
 
 describe("ElevenLabsAgentSession passive startup diagnostics", () => {
   it("observes local publish settlement and rejection without changing synchronous commands", async () => {
-    const diagnostics: Array<{ event: SessionDiagnosticEvent; commandKind?: AgentControlCommandKind }> = [];
+    const diagnostics: Array<{
+      event: SessionDiagnosticEvent;
+      commandKind?: AgentControlCommandKind;
+    }> = [];
     const session = new ElevenLabsAgentSession(elevenLabsToken, {
       onDiagnosticEvent: (entry) => diagnostics.push(entry),
     });
@@ -229,7 +236,9 @@ describe("ElevenLabsAgentSession passive startup diagnostics", () => {
     session.sendUserMessage("not logged");
     await Promise.resolve();
 
-    publishData.mockImplementationOnce(() => Promise.reject(new Error("secret")));
+    publishData.mockImplementationOnce(() =>
+      Promise.reject(new Error("secret")),
+    );
     session.sendContextualUpdate("not logged");
     await Promise.resolve();
     await Promise.resolve();
@@ -241,7 +250,9 @@ describe("ElevenLabsAgentSession passive startup diagnostics", () => {
 
     expect(diagnostics).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ event: SessionDiagnosticEvent.ROOM_CONNECTED }),
+        expect.objectContaining({
+          event: SessionDiagnosticEvent.ROOM_CONNECTED,
+        }),
         expect.objectContaining({
           event: SessionDiagnosticEvent.AGENT_CONTROL_PUBLISH_SETTLED,
           commandKind: AgentControlCommandKind.USER_MESSAGE,
@@ -264,7 +275,8 @@ describe("ElevenLabsAgentSession passive startup diagnostics", () => {
       elevenLabsResponseKind?: ElevenLabsAgentResponseKind;
     }> = [];
     const session = setupSession(elevenLabsToken);
-    (session as any).config.onDiagnosticEvent = (entry: any) => diagnostics.push(entry);
+    (session as any).config.onDiagnosticEvent = (entry: any) =>
+      diagnostics.push(entry);
     await session.start();
 
     testContext.roomInstance._triggerDataReceived({
@@ -319,7 +331,9 @@ describe("ElevenLabsAgentSession passive startup diagnostics", () => {
     await session.stop();
 
     expect(
-      diagnostics.filter((event) => event === SessionDiagnosticEvent.SESSION_ENDED),
+      diagnostics.filter(
+        (event) => event === SessionDiagnosticEvent.SESSION_ENDED,
+      ),
     ).toHaveLength(1);
   });
 
@@ -342,7 +356,90 @@ describe("ElevenLabsAgentSession passive startup diagnostics", () => {
 
     await expect(session.start()).rejects.toBeDefined();
     expect(
-      diagnostics.filter((event) => event === SessionDiagnosticEvent.SESSION_ENDED),
+      diagnostics.filter(
+        (event) => event === SessionDiagnosticEvent.SESSION_ENDED,
+      ),
     ).toHaveLength(1);
+  });
+});
+
+describe("ElevenLabsAgentSession unexpected room termination", () => {
+  it("cleans up an unexpected disconnect once and emits the terminal diagnostic", async () => {
+    const diagnostics: SessionDiagnosticEvent[] = [];
+    const session = new ElevenLabsAgentSession(elevenLabsToken, {
+      onDiagnosticEvent: (entry) => diagnostics.push(entry.event),
+    });
+    testContext.sessionId = sessionInfoMock.session_id;
+    mockFetch(
+      {
+        url: "/v1/sessions/start",
+        method: "POST",
+        response: { data: sessionInfoMock, code: 1000 },
+      },
+      { url: "/v1/sessions/stop", method: "POST", response: { code: 1000 } },
+    );
+    const onDisconnected = vi.fn();
+    session.on(SessionEvent.SESSION_DISCONNECTED, onDisconnected);
+
+    await session.start();
+    testContext.roomInstance._triggerDisconnected();
+    await Promise.resolve();
+
+    expect(session.state).toBe(SessionState.DISCONNECTED);
+    expect(onDisconnected).toHaveBeenCalledTimes(1);
+    expect(onDisconnected).toHaveBeenCalledWith(
+      SessionDisconnectReason.UNKNOWN_REASON,
+    );
+    expect(
+      diagnostics.filter(
+        (event) => event === SessionDiagnosticEvent.SESSION_ENDED,
+      ),
+    ).toHaveLength(1);
+    expect(
+      diagnostics.filter(
+        (event) => event === SessionDiagnosticEvent.ROOM_DISCONNECTED,
+      ),
+    ).toHaveLength(1);
+    expect(testContext.roomInstance.disconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("ends once when LiveKit reconnect attempts are exhausted", async () => {
+    const diagnostics: SessionDiagnosticEvent[] = [];
+    const session = new ElevenLabsAgentSession(elevenLabsToken, {
+      onDiagnosticEvent: (entry) => diagnostics.push(entry.event),
+    });
+    testContext.sessionId = sessionInfoMock.session_id;
+    mockFetch(
+      {
+        url: "/v1/sessions/start",
+        method: "POST",
+        response: { data: sessionInfoMock, code: 1000 },
+      },
+      { url: "/v1/sessions/stop", method: "POST", response: { code: 1000 } },
+    );
+    const onDisconnected = vi.fn();
+    session.on(SessionEvent.SESSION_DISCONNECTED, onDisconnected);
+
+    await session.start();
+    testContext.roomInstance._triggerConnectionStateChanged(
+      ConnectionState.Reconnecting,
+    );
+    testContext.roomInstance._triggerConnectionStateChanged(
+      ConnectionState.SignalReconnecting,
+    );
+    testContext.roomInstance._triggerDisconnected();
+    // A second terminal notification after cleanup must not restart cleanup or
+    // publish a duplicate client terminal event.
+    testContext.roomInstance._triggerDisconnected();
+    await Promise.resolve();
+
+    expect(session.state).toBe(SessionState.DISCONNECTED);
+    expect(onDisconnected).toHaveBeenCalledTimes(1);
+    expect(
+      diagnostics.filter(
+        (event) => event === SessionDiagnosticEvent.SESSION_ENDED,
+      ),
+    ).toHaveLength(1);
+    expect(testContext.roomInstance.disconnect).toHaveBeenCalledTimes(1);
   });
 });

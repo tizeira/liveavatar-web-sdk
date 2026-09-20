@@ -12,6 +12,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "preflight:production": "node scripts/preflight-production.mjs",
     "postinstall": "prisma generate || echo 'Prisma generation skipped'",
     "db:migrate": "prisma migrate dev",
     "db:push": "prisma db push",

@@ -136,16 +136,21 @@ export const CUSTOMER_EXISTS_QUERY = `
 `;
 
 export const PRODUCTS_FOR_CLARA_QUERY = `
-  query productsForClara($first: Int!) {
+  query productsForClara($first: Int!, $after: String) {
     shop {
       currencyCode
       primaryDomain { url }
     }
-    products(first: $first, query: "status:active", sortKey: TITLE) {
+    products(first: $first, after: $after, query: "status:active", sortKey: TITLE) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
       nodes {
         id
         title
         handle
+        updatedAt
         description
         productType
         tags

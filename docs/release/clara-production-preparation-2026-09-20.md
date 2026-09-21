@@ -32,3 +32,11 @@ Antes de cualquier escritura Shopify: corroborar ID, rol y nombre del theme, dom
 6. Si falla: revertir aplicación o archivos del theme según el runbook; nunca restaurar una base automáticamente.
 
 Referencias: [entornos de Vercel](https://vercel.com/docs/environment-variables) y [preparación productiva Neon](https://neon.com/docs/get-started/production-checklist). Son criterios de revisión, no evidencia de configuración de este proyecto.
+
+## Catálogo Shopify persistente — candidato local 21/09/2026
+
+La rama `codex/clara-shopify-product-context-2026-09-20` incorpora, sin despliegue, un snapshot canónico del catálogo en Neon y adapta `shopify-products` para consultarlo antes que Shopify. La sincronización completa queda protegida por `CRON_SECRET`, programada cada seis horas en la configuración local de Vercel y limitada a 1.000 productos/páginas completas. Una falla o paginación incompleta conserva el último snapshot correcto; un catálogo completo válidamente vacío reemplaza los productos anteriores.
+
+El reemplazo borra y recrea el conjunto dentro de una sola transacción, por lo que soporta renombres, intercambios y reutilización de handles sin estados parciales. El guardado de rutinas conserva su validación directa por handle contra Shopify y no se cambió el contrato público de la herramienta del agente.
+
+Pendiente antes de usarlo: crear o seleccionar una rama aislada de Neon, aplicar allí la migración `20260922010000_add_clara_catalog`, ejecutar la primera sincronización y verificar búsqueda con datos reales. No se aplicó ninguna migración remota, no se creó webhook, no se modificó ElevenLabs y no se desplegó esta rama.

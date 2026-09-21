@@ -4,6 +4,7 @@ import { NextRequest } from "next/server";
 process.env.CLARA_AGENT_TOOL_SECRET = "test-tool-secret";
 
 const mockSearchProducts = vi.fn();
+const mockSearchSyncedProducts = vi.fn();
 const mockFetchProducts = vi.fn();
 const mockSaveRoutine = vi.fn();
 
@@ -11,6 +12,11 @@ vi.mock("@/src/shopify/client", () => ({
   searchProductsForClara: (...args: unknown[]) => mockSearchProducts(...args),
   fetchProductsForClaraByHandles: (...args: unknown[]) =>
     mockFetchProducts(...args),
+}));
+
+vi.mock("@/src/shopify/catalog", () => ({
+  searchSyncedProductsForClara: (...args: unknown[]) =>
+    mockSearchSyncedProducts(...args),
 }));
 
 vi.mock("@/src/consultations/repository", () => ({
@@ -36,6 +42,10 @@ function request(path: string, body: unknown, authorized = true) {
 beforeEach(() => {
   vi.clearAllMocks();
   mockSearchProducts.mockResolvedValue([]);
+  mockSearchSyncedProducts.mockResolvedValue({
+    initialized: false,
+    products: [],
+  });
   mockFetchProducts.mockResolvedValue(new Map());
   mockSaveRoutine.mockResolvedValue({});
 });
@@ -72,6 +82,53 @@ describe("Clara Shopify product tool", () => {
     expect(response.status).toBe(200);
     expect(mockSearchProducts).toHaveBeenCalledWith("flacidez");
     expect(json.products[0].handle).toBe("booster-02");
+  });
+
+  it("uses the durable catalog without querying Shopify", async () => {
+    mockSearchSyncedProducts.mockResolvedValue({
+      initialized: true,
+      products: [
+        {
+          id: "gid://shopify/Product/2",
+          title: "Beta Hidra",
+          handle: "beta-hidra",
+          description: "Hidratación",
+          url: "https://example.test/products/beta-hidra",
+          imageUrl: null,
+          imageAlt: null,
+          availableForSale: true,
+          price: null,
+          compareAtPrice: null,
+          companionCondition: null,
+          companionProducts: [],
+        },
+      ],
+    });
+
+    const response = await productRoute.POST(
+      request("/api/agent-tools/shopify-products", { query: "hidratación" }),
+    );
+    const json = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(json.products[0].handle).toBe("beta-hidra");
+    expect(mockSearchProducts).not.toHaveBeenCalled();
+  });
+
+  it("does not query Shopify when an initialized catalog has no match", async () => {
+    mockSearchSyncedProducts.mockResolvedValue({
+      initialized: true,
+      products: [],
+    });
+
+    const response = await productRoute.POST(
+      request("/api/agent-tools/shopify-products", { query: "inexistente" }),
+    );
+    const json = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(json.products).toEqual([]);
+    expect(mockSearchProducts).not.toHaveBeenCalled();
   });
 });
 

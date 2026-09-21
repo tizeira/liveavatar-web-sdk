@@ -24,6 +24,7 @@ import {
   SKIN_TYPE_KEY,
   SKIN_CONCERNS_KEY,
   ClaraCatalogProduct,
+  ClaraCatalogSnapshotEntry,
 } from "./types";
 
 // Current stable Admin API. Keep this server-side so the Admin token is never
@@ -71,6 +72,7 @@ type ClaraProductBaseNode = {
   id: string;
   title: string;
   handle: string;
+  updatedAt?: string;
   description: string;
   productType: string;
   tags: string[];
@@ -166,6 +168,87 @@ function toClaraCatalogProduct(
   };
 }
 
+function normalizeCatalogText(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function toClaraCatalogSnapshotEntry(
+  node: ClaraProductNode,
+  currencyCode: string,
+  primaryDomainUrl: string,
+): ClaraCatalogSnapshotEntry {
+  if (!node.updatedAt) {
+    throw new Error("Shopify catalog product is missing updatedAt");
+  }
+  return {
+    product: toClaraCatalogProduct(node, currencyCode, primaryDomainUrl),
+    searchText: normalizeCatalogText(
+      [
+        node.title,
+        node.handle,
+        node.description,
+        node.productType,
+        ...node.tags,
+      ].join(" "),
+    ),
+    shopifyUpdatedAt: node.updatedAt,
+  };
+}
+
+const CLARA_CATALOG_PAGE_SIZE = 100;
+const CLARA_CATALOG_MAX_PAGES = 10;
+
+type ClaraCatalogPage = {
+  shop: { currencyCode: string; primaryDomain: { url: string } };
+  products: {
+    pageInfo: { hasNextPage: boolean; endCursor: string | null };
+    nodes: ClaraProductNode[];
+  };
+};
+
+export async function fetchClaraCatalogSnapshot(): Promise<
+  ClaraCatalogSnapshotEntry[]
+> {
+  const entries: ClaraCatalogSnapshotEntry[] = [];
+  let after: string | null = null;
+
+  for (let page = 0; page < CLARA_CATALOG_MAX_PAGES; page += 1) {
+    const data: ClaraCatalogPage = await shopifyGraphQL<ClaraCatalogPage>(
+      PRODUCTS_FOR_CLARA_QUERY,
+      {
+        first: CLARA_CATALOG_PAGE_SIZE,
+        after,
+      },
+    );
+
+    entries.push(
+      ...data.products.nodes
+        .filter((node) => node.status === "ACTIVE")
+        .map((node) =>
+          toClaraCatalogSnapshotEntry(
+            node,
+            data.shop.currencyCode,
+            data.shop.primaryDomain.url,
+          ),
+        )
+        .filter(
+          ({ product }) => product.availableForSale && Boolean(product.url),
+        ),
+    );
+
+    if (!data.products.pageInfo.hasNextPage) return entries;
+    if (!data.products.pageInfo.endCursor) {
+      throw new Error("Shopify catalog pagination returned no cursor");
+    }
+    after = data.products.pageInfo.endCursor;
+  }
+
+  throw new Error("Shopify catalog exceeded the safe pagination limit");
+}
+
 export async function searchProductsForClara(
   searchTerm: string,
   limit = 5,
@@ -176,58 +259,29 @@ export async function searchProductsForClara(
     .slice(0, 120);
   if (!cleanTerm) return [];
 
-  const data = await shopifyGraphQL<{
-    shop: { currencyCode: string; primaryDomain: { url: string } };
-    products: { nodes: ClaraProductNode[] };
-  }>(PRODUCTS_FOR_CLARA_QUERY, {
-    // Clara's catalogue is small. Shopify Admin search does not reliably match
-    // Spanish concern words inside product descriptions, so fetch the active
-    // catalogue and rank only fields that came from Shopify.
-    first: 100,
-  });
-
-  const normalize = (value: string) =>
-    value
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .toLowerCase();
-  const normalizedTerm = normalize(cleanTerm);
+  // This remains the safe bootstrap fallback until the durable catalog has
+  // completed its first sync. It fetches a complete, bounded snapshot.
+  const entries = await fetchClaraCatalogSnapshot();
+  const normalizedTerm = normalizeCatalogText(cleanTerm);
   const tokens = normalizedTerm
     .split(/\s+/)
     .filter((token) => token.length >= 3);
 
-  return data.products.nodes
-    .filter((node) => node.status === "ACTIVE")
-    .map((node) => {
-      const title = normalize(node.title);
-      const haystack = normalize(
-        [
-          node.title,
-          node.handle,
-          node.description,
-          node.productType,
-          ...node.tags,
-        ].join(" "),
-      );
+  return entries
+    .map((entry) => {
+      const title = normalizeCatalogText(entry.product.title);
       const score =
         (title.includes(normalizedTerm) ? 20 : 0) +
         tokens.reduce(
-          (total, token) => total + (haystack.includes(token) ? 1 : 0),
+          (total, token) => total + (entry.searchText.includes(token) ? 1 : 0),
           0,
         );
-      return { node, score };
+      return { product: entry.product, score };
     })
     .filter(({ score }) => score > 0)
     .sort((a, b) => b.score - a.score)
     .slice(0, Math.min(Math.max(limit, 1), 8))
-    .map(({ node }) =>
-      toClaraCatalogProduct(
-        node,
-        data.shop.currencyCode,
-        data.shop.primaryDomain.url,
-      ),
-    )
-    .filter((product) => product.availableForSale && product.url);
+    .map(({ product }) => product);
 }
 
 export async function fetchProductForClaraByHandle(

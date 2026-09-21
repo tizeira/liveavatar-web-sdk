@@ -79,6 +79,12 @@ export interface ClaraCatalogProduct extends ClaraCatalogProductSummary {
   companionProducts: ClaraCatalogProductSummary[];
 }
 
+export interface ClaraCatalogSnapshotEntry {
+  product: ClaraCatalogProduct;
+  searchText: string;
+  shopifyUpdatedAt: string;
+}
+
 // ============================================================================
 // Processed Customer Data Types
 // ============================================================================

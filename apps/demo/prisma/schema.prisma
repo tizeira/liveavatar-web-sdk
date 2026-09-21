@@ -26,8 +26,8 @@ model ClaraConsultation {
   // customer ID, email, name, signed URL and Shopify token are never persisted.
   shopifyCustomerKey String?
 
-  liveAvatarSessionId      String? @unique
-  elevenLabsConversationId String? @unique
+  liveAvatarSessionId      String?                 @unique
+  elevenLabsConversationId String?                 @unique
   status                   ClaraConsultationStatus @default(pending)
 
   // Transcript is normalized and short-lived. Summary and routine live for
@@ -37,12 +37,12 @@ model ClaraConsultation {
   summary         String?
   routine         Json?
 
-  createdAt           DateTime  @default(now())
-  updatedAt           DateTime  @updatedAt
-  completedAt         DateTime?
-  transcriptExpiresAt DateTime
-  recordExpiresAt     DateTime
-  metricsRecordedAt   DateTime?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+  completedAt             DateTime?
+  transcriptExpiresAt     DateTime
+  recordExpiresAt         DateTime
+  metricsRecordedAt       DateTime?
   routineMetricRecordedAt DateTime?
 
   @@index([shopifyCustomerKey, completedAt])
@@ -64,4 +64,39 @@ model ClaraDailyMetric {
   updatedAt DateTime @updatedAt
 
   @@map("clara_daily_metrics")
+}
+
+model ClaraCatalogProduct {
+  // Shopify's ID remains stable if the merchant changes the public handle.
+  shopifyProductId String @id
+  handle           String @unique
+  title            String
+
+  // Canonical product payload returned by the Clara tool. Search-only text is
+  // stored separately so internal tags/product type do not leak to the agent.
+  payload    Json
+  searchText String @db.Text
+
+  availableForSale Boolean
+  shopifyUpdatedAt DateTime
+  syncedAt         DateTime
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([availableForSale])
+  @@index([shopifyUpdatedAt])
+  @@map("clara_catalog_products")
+}
+
+model ClaraCatalogState {
+  source String @id
+
+  productCount         Int
+  catalogFingerprint   String
+  lastShopifyUpdatedAt DateTime?
+  lastSuccessfulSyncAt DateTime
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@map("clara_catalog_state")
 }

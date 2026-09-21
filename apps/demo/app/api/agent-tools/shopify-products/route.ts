@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { CLARA_AGENT_TOOL_SECRET } from "@/app/api/secrets";
 import { hasValidAgentToolSecret } from "@/src/consultations/security";
 import { searchProductsForClara } from "@/src/shopify/client";
+import { searchSyncedProductsForClara } from "@/src/shopify/catalog";
 import { createHash } from "node:crypto";
 import type { ClaraCatalogProduct } from "@/src/shopify/types";
 import { logger } from "@/src/lib/logger/secure-logger";
@@ -36,11 +37,21 @@ function writeCatalogCache(key: string, products: ClaraCatalogProduct[]) {
 
 function compactProduct(product: ClaraCatalogProduct) {
   return {
-    ...product,
+    id: product.id,
+    title: product.title,
+    handle: product.handle,
+    url: product.url,
+    imageUrl: product.imageUrl,
+    imageAlt: product.imageAlt,
+    availableForSale: product.availableForSale,
+    price: product.price,
+    compareAtPrice: product.compareAtPrice,
     description:
       typeof product.description === "string"
         ? product.description.slice(0, 480)
         : "",
+    companionCondition: product.companionCondition,
+    companionProducts: product.companionProducts,
   };
 }
 
@@ -82,11 +93,29 @@ export async function POST(request: NextRequest) {
     const cacheKey = `clara:catalog-search:${createHash("sha256")
       .update(normalizedQuery)
       .digest("hex")}`;
-    let products = readCatalogCache(cacheKey);
-    const cacheHit = Array.isArray(products);
+    let products: ClaraCatalogProduct[] | null = null;
+    let durableCatalogHit = false;
+    try {
+      const durableResult = await searchSyncedProductsForClara(query);
+      if (durableResult.initialized) {
+        products = durableResult.products;
+        durableCatalogHit = true;
+      }
+    } catch {
+      logger.warn(
+        "Clara durable catalog unavailable; using Shopify bootstrap fallback",
+        undefined,
+        { route: "/api/agent-tools/shopify-products" },
+      );
+    }
+
+    const cachedFallback =
+      products === null ? readCatalogCache(cacheKey) : null;
+    if (cachedFallback) products = cachedFallback;
+    const cacheHit = durableCatalogHit || Array.isArray(cachedFallback);
 
     const shopifyStartedAt = performance.now();
-    if (!products) {
+    if (products === null) {
       products = await searchProductsForClara(query);
       writeCatalogCache(cacheKey, products);
     }
@@ -100,6 +129,7 @@ export async function POST(request: NextRequest) {
         tool_total_ms: Math.round(performance.now() - startedAt),
         shopify_ms: shopifyMs,
         cache_hit: cacheHit,
+        durable_catalog_hit: durableCatalogHit,
         result_count: compactProducts.length,
       },
       { route: "/api/agent-tools/shopify-products" },

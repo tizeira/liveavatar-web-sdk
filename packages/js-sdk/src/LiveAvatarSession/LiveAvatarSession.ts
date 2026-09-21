@@ -712,7 +712,9 @@ export class LiveAvatarSession extends (EventEmitter as new () => TypedEmitter<
     }
 
     if (event.event_type === AgentEventsEnum.AVATAR_SPEAK_STARTED) {
-      this.emitDiagnostic({ event: SessionDiagnosticEvent.AVATAR_SPEAK_STARTED });
+      this.emitDiagnostic({
+        event: SessionDiagnosticEvent.AVATAR_SPEAK_STARTED,
+      });
     } else if (event.event_type === AgentEventsEnum.AVATAR_SPEAK_ENDED) {
       this.emitDiagnostic({ event: SessionDiagnosticEvent.AVATAR_SPEAK_ENDED });
     }

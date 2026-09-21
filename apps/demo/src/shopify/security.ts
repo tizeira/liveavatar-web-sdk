@@ -14,17 +14,30 @@ export interface ClaraShopifySignedAccess {
   ordersCount: number;
   issuedAt: number;
   version: string;
+  purchaseContext?: "1";
+  lastOrderProduct?: string;
+  lastOrderDate?: string;
 }
 
 export function buildClaraShopifyAccessPayload(
   input: ClaraShopifySignedAccess,
 ): string {
-  return [
+  const fields = [
     `v=${input.version}`,
     `customer_id=${input.customerId}`,
     `orders_count=${input.ordersCount}`,
     `issued_at=${input.issuedAt}`,
-  ].join("&");
+  ];
+
+  if (input.purchaseContext === "1") {
+    fields.push(
+      "purchase_context=1",
+      `last_order_date=${input.lastOrderDate || ""}`,
+      `last_order_product=${input.lastOrderProduct || ""}`,
+    );
+  }
+
+  return fields.join("&");
 }
 
 export function verifyClaraShopifyAccessToken(
@@ -40,7 +53,13 @@ export function verifyClaraShopifyAccessToken(
     input.ordersCount < 0 ||
     !Number.isSafeInteger(input.issuedAt) ||
     input.issuedAt > nowSeconds + 60 ||
-    nowSeconds - input.issuedAt > CLARA_SHOPIFY_LINK_MAX_AGE_SECONDS
+    nowSeconds - input.issuedAt > CLARA_SHOPIFY_LINK_MAX_AGE_SECONDS ||
+    (input.purchaseContext !== undefined && input.purchaseContext !== "1") ||
+    (input.purchaseContext === "1" &&
+      (typeof input.lastOrderProduct !== "string" ||
+        input.lastOrderProduct.length > 512 ||
+        typeof input.lastOrderDate !== "string" ||
+        input.lastOrderDate.length > 80))
   ) {
     return false;
   }

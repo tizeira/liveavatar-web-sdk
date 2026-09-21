@@ -39,15 +39,40 @@ function post(body: Record<string, unknown>) {
   });
 }
 
-function v2Body(ordersCount: number) {
+function v2Body(
+  ordersCount: number,
+  options: {
+    includePurchaseContext?: boolean;
+    issuedAt?: number;
+    lastOrderDate?: string;
+    lastOrderProduct?: string;
+  } = {},
+) {
   const customerId = "9455117238574";
-  const issuedAt = Math.floor(Date.now() / 1000);
-  const payload = `v=2&customer_id=${customerId}&orders_count=${ordersCount}&issued_at=${issuedAt}`;
+  const issuedAt = options.issuedAt ?? Math.floor(Date.now() / 1000);
+  const includePurchaseContext = options.includePurchaseContext ?? true;
+  const lastOrderDate = options.lastOrderDate ?? "2026-09-18T14:30:00Z";
+  const lastOrderProduct = options.lastOrderProduct ?? "Beta Hydra";
+  const payload = [
+    `v=2&customer_id=${customerId}&orders_count=${ordersCount}&issued_at=${issuedAt}`,
+    includePurchaseContext
+      ? `purchase_context=1&last_order_date=${lastOrderDate}&last_order_product=${lastOrderProduct}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join("&");
   return {
     clara_v: "2",
     customer_id: customerId,
     orders_count: String(ordersCount),
     issued_at: String(issuedAt),
+    ...(includePurchaseContext
+      ? {
+          purchase_context: "1",
+          last_order_date: lastOrderDate,
+          last_order_product: lastOrderProduct,
+        }
+      : {}),
     shopify_token: createHmac("sha256", "shopify-test-secret")
       .update(payload)
       .digest("hex"),
@@ -75,6 +100,12 @@ describe("Shopify buyer access exchange", () => {
     );
     expect(response.headers.get("set-cookie")).toContain("HttpOnly");
     expect(mockIssueTicket).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lastOrderProduct: "Beta Hydra",
+        lastOrderDate: "2026-09-18T14:30:00Z",
+      }),
+    );
+    expect(mockIssueTicket).toHaveBeenCalledWith(
       expect.not.objectContaining({ email: expect.anything() }),
     );
   });
@@ -90,6 +121,57 @@ describe("Shopify buyer access exchange", () => {
     body.orders_count = "2";
     const response = await route.POST(post(body));
     expect(response.status).toBe(401);
+  });
+
+  it("rejects tampered signed purchase context", async () => {
+    const body = v2Body(1);
+    body.last_order_product = "Otro producto";
+    const response = await route.POST(post(body));
+    expect(response.status).toBe(401);
+    expect(mockIssueTicket).not.toHaveBeenCalled();
+  });
+
+  it("accepts legacy v2 links but ignores unsigned purchase context", async () => {
+    const body = v2Body(1, { includePurchaseContext: false });
+    body.last_order_product = "Producto no firmado";
+    body.last_order_date = "2026-09-18T14:30:00Z";
+
+    const response = await route.POST(post(body));
+
+    expect(response.status).toBe(200);
+    expect(mockIssueTicket).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lastOrderProduct: null,
+        lastOrderDate: null,
+      }),
+    );
+  });
+
+  it("accepts a signed buyer with no available last-order details", async () => {
+    const response = await route.POST(
+      post(v2Body(1, { lastOrderDate: "", lastOrderProduct: "" })),
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockIssueTicket).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lastOrderProduct: null,
+        lastOrderDate: null,
+      }),
+    );
+  });
+
+  it("rejects an expired signed buyer link", async () => {
+    const response = await route.POST(
+      post(
+        v2Body(1, {
+          issuedAt: Math.floor(Date.now() / 1000) - 301,
+        }),
+      ),
+    );
+
+    expect(response.status).toBe(401);
+    expect(mockIssueTicket).not.toHaveBeenCalled();
   });
 
   it("never trusts legacy orders_count without checking Shopify", async () => {

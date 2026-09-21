@@ -15,6 +15,7 @@ import {
   isMockMode,
   getMockScenario,
 } from "@/src/lib/mock-data";
+import { buildShopifyAccessRequestBody } from "@/src/shopify/access-request";
 
 type PageState =
   | "loading"
@@ -43,16 +44,7 @@ export default function Home() {
       const response = await fetch("/api/shopify-access", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          customer_id: params.get("customer_id"),
-          shopify_token: params.get("shopify_token"),
-          clara_v: params.get("clara_v"),
-          issued_at: params.get("issued_at"),
-          first_name: params.get("first_name"),
-          orders_count: params.get("orders_count"),
-          last_order_product: params.get("last_order_product"),
-          last_order_date: params.get("last_order_date"),
-        }),
+        body: JSON.stringify(buildShopifyAccessRequestBody(params)),
       });
 
       const data = await response.json();

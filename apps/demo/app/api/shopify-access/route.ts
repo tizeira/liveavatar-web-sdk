@@ -23,6 +23,10 @@ function cleanText(value: unknown, maxLength: number): string | null {
     : null;
 }
 
+function boundedSignedText(value: unknown, maxLength: number): string {
+  return typeof value === "string" && value.length <= maxLength ? value : "";
+}
+
 function customerResponse(ticket: {
   firstName: string | null;
   ordersCount: number;
@@ -95,6 +99,13 @@ export async function POST(request: NextRequest) {
   const version = cleanText(body.clara_v, 8);
   const suppliedOrders = Number(body.orders_count);
   const suppliedIssuedAt = Number(body.issued_at);
+  const suppliedPurchaseContext = cleanText(body.purchase_context, 8);
+  const suppliedLastOrderProduct = boundedSignedText(
+    body.last_order_product,
+    512,
+  );
+  const suppliedLastOrderDate = boundedSignedText(body.last_order_date, 80);
+  const hasSignedPurchaseContext = suppliedPurchaseContext === "1";
   let verifiedOrdersCount = 0;
   let mode: "signed_v2" | "legacy_verified";
 
@@ -105,6 +116,13 @@ export async function POST(request: NextRequest) {
       ordersCount: suppliedOrders,
       issuedAt: suppliedIssuedAt,
       version,
+      purchaseContext: hasSignedPurchaseContext ? "1" : undefined,
+      lastOrderProduct: hasSignedPurchaseContext
+        ? suppliedLastOrderProduct
+        : undefined,
+      lastOrderDate: hasSignedPurchaseContext
+        ? suppliedLastOrderDate
+        : undefined,
     })
   ) {
     verifiedOrdersCount = suppliedOrders;
@@ -158,8 +176,12 @@ export async function POST(request: NextRequest) {
     buyerKey: deriveShopifyCustomerKey(customerId, SHOPIFY_HMAC_SECRET),
     firstName: cleanText(body.first_name, 80),
     ordersCount: verifiedOrdersCount,
-    lastOrderProduct: cleanText(body.last_order_product, 240),
-    lastOrderDate: cleanText(body.last_order_date, 80),
+    lastOrderProduct: hasSignedPurchaseContext
+      ? cleanText(suppliedLastOrderProduct, 240)
+      : null,
+    lastOrderDate: hasSignedPurchaseContext
+      ? cleanText(suppliedLastOrderDate, 80)
+      : null,
     issuedAt: Math.floor(Date.now() / 1000),
   };
 

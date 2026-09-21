@@ -1,6 +1,10 @@
 {% comment %}
   Clara QA access v2. The signature covers purchase entitlement and expires in
   five minutes. Clara exchanges it for an HttpOnly ticket and cleans the URL.
+
+  This page redirects the browser to Clara at the top level. Do not embed the
+  target in an iframe: the access exchange needs to set Clara's first-party
+  HttpOnly cookie before it removes the signed parameters from the URL.
 {% endcomment %}
 
 {%- liquid
@@ -12,14 +16,28 @@
     assign customer_id = customer.id
     assign orders_count = customer.orders_count
     assign issued_at = 'now' | date: '%s'
-    assign signed_payload = 'v=2&customer_id=' | append: customer_id | append: '&orders_count=' | append: orders_count | append: '&issued_at=' | append: issued_at
+    assign last_order_product = blank
+    assign last_order_date = blank
+
+    if customer.last_order
+      assign last_order_line_item = customer.last_order.line_items | first
+      assign last_order_product = last_order_line_item.title
+      assign last_order_date = customer.last_order.created_at | date: '%Y-%m-%dT%H:%M:%SZ'
+    endif
+
+    assign signed_payload = 'v=2&customer_id=' | append: customer_id | append: '&orders_count=' | append: orders_count | append: '&issued_at=' | append: issued_at | append: '&purchase_context=1&last_order_date=' | append: last_order_date | append: '&last_order_product=' | append: last_order_product
     assign shopify_token = signed_payload | hmac_sha256: hmac_secret
     assign encoded_first_name = customer.first_name | url_encode
+    assign encoded_last_order_product = last_order_product | url_encode
+    assign encoded_last_order_date = last_order_date | url_encode
 
     assign widget_url = clara_domain
     assign widget_url = widget_url | append: '?clara_v=2&customer_id=' | append: customer_id
     assign widget_url = widget_url | append: '&orders_count=' | append: orders_count
     assign widget_url = widget_url | append: '&issued_at=' | append: issued_at
+    assign widget_url = widget_url | append: '&purchase_context=1'
+    assign widget_url = widget_url | append: '&last_order_date=' | append: encoded_last_order_date
+    assign widget_url = widget_url | append: '&last_order_product=' | append: encoded_last_order_product
     assign widget_url = widget_url | append: '&shopify_token=' | append: shopify_token
 
     if customer.first_name != blank
@@ -28,74 +46,10 @@
   endif
 -%}
 
-<style>
-  .clara-container {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100vw;
-    height: 100vh;
-    background: #fff;
-    z-index: 99999;
-  }
-  .clara-container iframe {
-    width: 100%;
-    height: 100%;
-    border: none;
-  }
-  .clara-loading {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    text-align: center;
-    font-family: system-ui, sans-serif;
-  }
-  .clara-spinner {
-    width: 40px;
-    height: 40px;
-    border: 3px solid #e0e0e0;
-    border-top-color: #667eea;
-    border-radius: 50%;
-    animation: spin 1s linear infinite;
-    margin: 0 auto 15px;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
-</style>
-
-<div class="clara-container" id="clara-container">
-  <div class="clara-loading" id="clara-loading">
-    <div class="clara-spinner"></div>
-    <p>Cargando Clara...</p>
-  </div>
-</div>
-
 <script>
-(function() {
-  var url = {{ widget_url | json }};
-  var container = document.getElementById('clara-container');
-  var loading = document.getElementById('clara-loading');
-
-  // Create iframe dynamically (same as debug page)
-  var iframe = document.createElement('iframe');
-  iframe.src = url;
-  iframe.allow = 'microphone; camera';
-  iframe.style.cssText = 'width:100%;height:100%;border:none;';
-
-  iframe.onload = function() {
-    if (loading) loading.style.display = 'none';
-  };
-
-  iframe.onerror = function() {
-    loading.innerHTML = '<p style="color:red;">Error cargando Clara</p><p style="font-size:12px;">' + url + '</p>';
-  };
-
-  // Append iframe
-  container.appendChild(iframe);
-
-  // Fallback: hide loading after 5s
-  setTimeout(function() {
-    if (loading) loading.style.display = 'none';
-  }, 5000);
-})();
+  window.location.replace({{ widget_url | json }});
 </script>
+
+<noscript>
+  <p><a href="{{ widget_url | escape }}">Continuar a Clara</a></p>
+</noscript>

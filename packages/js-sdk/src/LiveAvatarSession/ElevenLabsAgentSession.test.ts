@@ -419,7 +419,9 @@ describe("ElevenLabsAgentSession unexpected room termination", () => {
 
     await session.start();
     testContext.roomInstance._triggerDisconnected();
-    await Promise.resolve();
+    await vi.waitFor(() => {
+      expect(session.state).toBe(SessionState.DISCONNECTED);
+    });
 
     expect(session.state).toBe(SessionState.DISCONNECTED);
     expect(onDisconnected).toHaveBeenCalledTimes(1);
@@ -467,7 +469,9 @@ describe("ElevenLabsAgentSession unexpected room termination", () => {
     // A second terminal notification after cleanup must not restart cleanup or
     // publish a duplicate client terminal event.
     testContext.roomInstance._triggerDisconnected();
-    await Promise.resolve();
+    await vi.waitFor(() => {
+      expect(session.state).toBe(SessionState.DISCONNECTED);
+    });
 
     expect(session.state).toBe(SessionState.DISCONNECTED);
     expect(onDisconnected).toHaveBeenCalledTimes(1);

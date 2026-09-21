@@ -59,6 +59,25 @@ const setupLiveAvatarSession = ({
 };
 
 describe("LiveAvatarSession start", () => {
+  it("does not become connected after the room disconnects during startup", async () => {
+    const session = setupLiveAvatarSession({ sessionInfo: sessionInfoMock });
+
+    const starting = session.start();
+    await vi.waitFor(
+      () => {
+        expect(testContext.roomInstance.state).toBe("connecting");
+      },
+      { interval: 1, timeout: 100 },
+    );
+    testContext.roomInstance._triggerDisconnected();
+
+    await expect(starting).rejects.toThrow(
+      "Session disconnected while connecting to the room",
+    );
+    expect(session.state).toBe(SessionState.DISCONNECTED);
+    expect(testContext.roomInstance.state).toBe("disconnected");
+  });
+
   it("starts the session and emits state changed events", async () => {
     const session = setupLiveAvatarSession({ sessionInfo: sessionInfoMock });
     const onStateChanged = vi.fn();
@@ -171,9 +190,16 @@ describe("LiveAvatarSession disconnect", () => {
     session.on(SessionEvent.SESSION_DISCONNECTED, onDisconnected);
     await session.start();
     testContext.roomInstance._triggerDisconnected();
-    expect(onStateChanged).toHaveBeenCalledTimes(3);
+    await vi.waitFor(() => {
+      expect(session.state).toBe(SessionState.DISCONNECTED);
+    });
+    expect(onStateChanged).toHaveBeenCalledTimes(4);
     expect(onStateChanged).toHaveBeenNthCalledWith(
       3,
+      SessionState.DISCONNECTING,
+    );
+    expect(onStateChanged).toHaveBeenNthCalledWith(
+      4,
       SessionState.DISCONNECTED,
     );
     expect(onDisconnected).toHaveBeenCalledWith(
@@ -192,9 +218,16 @@ describe("LiveAvatarSession disconnect", () => {
     session.on(SessionEvent.SESSION_DISCONNECTED, onDisconnected);
     await session.start();
     testContext.wsInstance._triggerClose({ code: 1000, reason: "test" });
-    expect(onStateChanged).toHaveBeenCalledTimes(3);
+    await vi.waitFor(() => {
+      expect(session.state).toBe(SessionState.DISCONNECTED);
+    });
+    expect(onStateChanged).toHaveBeenCalledTimes(4);
     expect(onStateChanged).toHaveBeenNthCalledWith(
       3,
+      SessionState.DISCONNECTING,
+    );
+    expect(onStateChanged).toHaveBeenNthCalledWith(
+      4,
       SessionState.DISCONNECTED,
     );
     expect(onDisconnected).toHaveBeenCalledWith(
@@ -470,6 +503,38 @@ describe("LiveAvatarSession server events", () => {
 });
 
 describe("LiveAvatarSession stop", () => {
+  it("does not report disconnection until the provider stop request settles", async () => {
+    const session = setupLiveAvatarSession({ sessionInfo: sessionInfoMock });
+    const onDisconnected = vi.fn();
+    session.on(SessionEvent.SESSION_DISCONNECTED, onDisconnected);
+    await session.start();
+
+    let resolveStop!: (response: Response) => void;
+    vi.mocked(fetch).mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveStop = resolve;
+        }),
+    );
+
+    const stopping = session.stop();
+    await Promise.resolve();
+
+    expect(session.state).toBe(SessionState.DISCONNECTING);
+    expect(onDisconnected).not.toHaveBeenCalled();
+
+    resolveStop(
+      new Response(JSON.stringify({ code: 1000 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    await stopping;
+
+    expect(session.state).toBe(SessionState.DISCONNECTED);
+    expect(onDisconnected).toHaveBeenCalledOnce();
+  });
+
   it("stops and cleans up the session", async () => {
     mockWebSocket();
     const session = setupLiveAvatarSession({
@@ -498,12 +563,37 @@ describe("LiveAvatarSession stop", () => {
     expect(testContext.wsInstance.close).toHaveBeenCalled();
     expect(fetch).toHaveBeenCalledWith(`${API_URL}/v1/sessions/stop`, {
       method: "POST",
+      keepalive: true,
       headers: {
         Authorization: "Bearer mock-session-token",
         "Content-Type": "application/json",
       },
       credentials: "include",
     });
+  });
+
+  it("keeps the session non-terminal and allows retry when provider stop fails", async () => {
+    const session = setupLiveAvatarSession({ sessionInfo: sessionInfoMock });
+    const onDisconnected = vi.fn();
+    session.on(SessionEvent.SESSION_DISCONNECTED, onDisconnected);
+    await session.start();
+
+    vi.mocked(fetch).mockRejectedValueOnce(new Error("network unavailable"));
+    await expect(session.stop()).rejects.toThrow("API request failed");
+
+    expect(session.state).toBe(SessionState.DISCONNECTING);
+    expect(onDisconnected).not.toHaveBeenCalled();
+
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(JSON.stringify({ code: 1000 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    await session.stop();
+
+    expect(session.state).toBe(SessionState.DISCONNECTED);
+    expect(onDisconnected).toHaveBeenCalledOnce();
   });
 });
 
@@ -549,6 +639,9 @@ describe("LiveAvatarSession server-initiated stop", () => {
         stop_reason: "session_duration_exceeded",
       }),
     );
+    await vi.waitFor(() => {
+      expect(session.state).toBe(SessionState.DISCONNECTED);
+    });
     expect(onDisconnected).toHaveBeenCalledWith(
       SessionDisconnectReason.SERVER_INITIATED,
     );

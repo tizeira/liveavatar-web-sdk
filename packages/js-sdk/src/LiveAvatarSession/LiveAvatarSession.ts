@@ -128,6 +128,7 @@ export class LiveAvatarSession extends (EventEmitter as new () => TypedEmitter<
   private readonly _agentType: AgentType;
   private readonly diagnosticStartedAt: number;
   private terminalDiagnosticEmitted = false;
+  private stopFinalizationPromise: Promise<void> | null = null;
 
   constructor(sessionAccessToken: string, config?: SessionConfig) {
     super();
@@ -211,6 +212,10 @@ export class LiveAvatarSession extends (EventEmitter as new () => TypedEmitter<
         // Track the different events from the room, server, and websocket
         this.trackEvents();
         await this.room.connect(livekitRoomUrl, livekitClientToken);
+        if (this.state !== SessionState.CONNECTING) {
+          await this.cleanup(false);
+          throw new Error("Session disconnected while connecting to the room");
+        }
         this.emitDiagnostic({
           event: SessionDiagnosticEvent.ROOM_CONNECTED,
         });
@@ -226,23 +231,41 @@ export class LiveAvatarSession extends (EventEmitter as new () => TypedEmitter<
 
       // Run configurations as needed
       await this.configureSession();
+      if (this.state !== SessionState.CONNECTING) {
+        await this.cleanup(false);
+        throw new Error("Session disconnected during startup");
+      }
       this.state = SessionState.CONNECTED;
     } catch (error) {
       console.error("Session start failed:", error);
-      this.cleanup();
-      this.postStop(SessionDisconnectReason.SESSION_START_FAILED);
+      try {
+        await this.finalizeStop(SessionDisconnectReason.SESSION_START_FAILED);
+      } catch (cleanupError) {
+        console.error(
+          "Session cleanup after start failure failed:",
+          cleanupError,
+        );
+      }
       throw error;
     }
   }
 
   public async stop(): Promise<void> {
-    if (!this.assertConnected()) {
+    if (this.stopFinalizationPromise) {
+      return await this.stopFinalizationPromise;
+    }
+    if (
+      this.state !== SessionState.CONNECTED &&
+      this.state !== SessionState.DISCONNECTING
+    ) {
+      console.warn("Session is not connected");
       return;
     }
 
-    this.state = SessionState.DISCONNECTING;
-    this.cleanup();
-    this.postStop(SessionDisconnectReason.CLIENT_INITIATED);
+    if (this.state === SessionState.CONNECTED) {
+      this.state = SessionState.DISCONNECTING;
+    }
+    return await this.finalizeStop(SessionDisconnectReason.CLIENT_INITIATED);
   }
 
   public async keepAlive(): Promise<void> {
@@ -418,8 +441,13 @@ export class LiveAvatarSession extends (EventEmitter as new () => TypedEmitter<
         "[SDK:SESSION_STOPPED] Server stopped session, reason:",
         event.stop_reason,
       );
-      this.cleanup();
-      this.postStop(SessionDisconnectReason.SERVER_INITIATED);
+      this.state = SessionState.DISCONNECTING;
+      void this.finalizeStop(
+        SessionDisconnectReason.SERVER_INITIATED,
+        false,
+      ).catch((error) =>
+        console.error("Local cleanup after server stop failed:", error),
+      );
     });
 
     this.room.on(RoomEvent.ParticipantConnected, (participant) => {
@@ -564,8 +592,11 @@ export class LiveAvatarSession extends (EventEmitter as new () => TypedEmitter<
     }
 
     this._sessionEventSocket = null;
-    this.cleanup();
-    this.postStop(SessionDisconnectReason.UNKNOWN_REASON);
+    this.state = SessionState.DISCONNECTING;
+    void this.finalizeStop(SessionDisconnectReason.UNKNOWN_REASON).catch(
+      (error) =>
+        console.error("Session cleanup after socket disconnect failed:", error),
+    );
   }
 
   private async configureSession(): Promise<void> {
@@ -593,7 +624,7 @@ export class LiveAvatarSession extends (EventEmitter as new () => TypedEmitter<
     this.emit(SessionEvent.SESSION_STATE_CHANGED, state);
   }
 
-  private async cleanup(): Promise<void> {
+  private async cleanup(stopProvider = true): Promise<void> {
     this.connectionQualityIndicator.stop();
     this.voiceChat.stop();
     if (this._remoteAudioTrack) {
@@ -627,8 +658,39 @@ export class LiveAvatarSession extends (EventEmitter as new () => TypedEmitter<
     if (this.room.state === "connected") {
       this.room.disconnect();
     }
-    // Kill the session on the server
-    await this.sessionClient.stopSession();
+    if (stopProvider) {
+      // Kill the session on the server. SESSION_STOPPED is already an
+      // authoritative provider terminal signal and skips this request.
+      await this.sessionClient.stopSession();
+    }
+  }
+
+  private finalizeStop(
+    reason: SessionDisconnectReason,
+    stopProvider = true,
+  ): Promise<void> {
+    if (this.stopFinalizationPromise) {
+      return this.stopFinalizationPromise;
+    }
+
+    // Defer cleanup by one microtask so the shared promise is installed before
+    // room.disconnect() can synchronously emit another disconnect event.
+    this.stopFinalizationPromise = Promise.resolve()
+      .then(async () => {
+        await this.cleanup(stopProvider);
+        // Consumers may release their own durable reservation when they observe
+        // DISCONNECTED. Emit it only after the provider stop request succeeds,
+        // or after an authoritative server terminal event.
+        this.postStop(reason);
+      })
+      .catch((error) => {
+        // Keep DISCONNECTING and the caller's durable reservation intact. A
+        // later explicit stop or pagehide cleanup may safely retry.
+        this.stopFinalizationPromise = null;
+        throw error;
+      });
+
+    return this.stopFinalizationPromise;
   }
 
   private postStop(reason: SessionDisconnectReason): void {
@@ -641,8 +703,18 @@ export class LiveAvatarSession extends (EventEmitter as new () => TypedEmitter<
   }
 
   private handleRoomDisconnect(): void {
-    this.cleanup();
-    this.postStop(SessionDisconnectReason.UNKNOWN_REASON);
+    if (
+      this.state === SessionState.DISCONNECTING ||
+      this.state === SessionState.DISCONNECTED
+    ) {
+      return;
+    }
+
+    this.state = SessionState.DISCONNECTING;
+    void this.finalizeStop(SessionDisconnectReason.UNKNOWN_REASON).catch(
+      (error) =>
+        console.error("Session cleanup after room disconnect failed:", error),
+    );
   }
 
   private sendCommandEvent(commandEvent: CommandEvent): void {

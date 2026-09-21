@@ -500,12 +500,16 @@ const AvatarVideo: React.FC<AvatarVideoProps> = ({
 // ============================================
 interface ConnectedSessionProps {
   onEndCall: () => void;
+  isEnding: boolean;
+  canRetryStop: boolean;
   chromaKeyEnabled: boolean;
   chromaSettings: ChromaSettings;
 }
 
 const ConnectedSession: React.FC<ConnectedSessionProps> = ({
   onEndCall,
+  isEnding,
+  canRetryStop,
   chromaKeyEnabled,
   chromaSettings,
 }) => {
@@ -535,7 +539,7 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
   const [showExpiryWarning, setShowExpiryWarning] = useState(false);
   const sessionTimerRef = useRef<NodeJS.Timeout | null>(null);
   const keepAliveIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const deferredVoiceChatStopRef = useRef<ReturnType<typeof setTimeout> | null>(
+  const deferredSessionStopRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
 
@@ -989,20 +993,30 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
   // Cleanup on unmount
   useEffect(() => {
     const session = sessionRef.current;
+    const stopOnPageHide = () => {
+      void session?.stop().catch(() => {
+        console.error("[SESSION] Cleanup during pagehide failed");
+      });
+    };
+
+    window.addEventListener("pagehide", stopOnPageHide);
 
     // Cancel the deferred stop scheduled by React Strict Mode's development
     // cleanup when the component is immediately mounted again.
-    if (deferredVoiceChatStopRef.current) {
-      clearTimeout(deferredVoiceChatStopRef.current);
-      deferredVoiceChatStopRef.current = null;
+    if (deferredSessionStopRef.current) {
+      clearTimeout(deferredSessionStopRef.current);
+      deferredSessionStopRef.current = null;
     }
 
     return () => {
+      window.removeEventListener("pagehide", stopOnPageHide);
       // Defer one task so a Strict Mode remount can cancel this. On a real
-      // unmount the callback runs and releases the microphone normally.
-      deferredVoiceChatStopRef.current = setTimeout(() => {
-        session?.voiceChat.stop();
-        deferredVoiceChatStopRef.current = null;
+      // unmount the callback runs and closes the complete provider session.
+      deferredSessionStopRef.current = setTimeout(() => {
+        void session?.stop().catch(() => {
+          console.error("[SESSION] Cleanup after unmount failed");
+        });
+        deferredSessionStopRef.current = null;
       }, 0);
       if (sessionTimerRef.current) {
         clearInterval(sessionTimerRef.current);
@@ -1025,6 +1039,25 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
 
   return (
     <div className={styles.darkScreen} style={containerStyle}>
+      {isEnding && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/65 px-6 text-center">
+          <div className="w-full max-w-sm rounded-3xl bg-white p-6 text-slate-900 shadow-2xl">
+            <p className="text-lg font-semibold">Finalizando conversación…</p>
+            <p className="mt-2 text-sm text-slate-600">
+              Esperá un momento mientras cerramos la sesión de forma segura.
+            </p>
+            {canRetryStop && (
+              <button
+                type="button"
+                onClick={onEndCall}
+                className="mt-5 w-full rounded-full bg-blue-600 px-5 py-3 font-semibold text-white"
+              >
+                Reintentar cierre
+              </button>
+            )}
+          </div>
+        </div>
+      )}
       {/* Session expiry warning */}
       {showExpiryWarning && (
         <SessionExpiryWarning secondsRemaining={sessionSecondsRemaining} />
@@ -1135,6 +1168,7 @@ const SessionWrapper: React.FC<SessionWrapperProps> = ({
 }) => {
   const { widgetState, sessionState } = useLiveAvatarContext();
   const { startSession, stopSession } = useSession();
+  const [canRetryStop, setCanRetryStop] = useState(false);
 
   // Start session automatically
   useEffect(() => {
@@ -1150,8 +1184,24 @@ const SessionWrapper: React.FC<SessionWrapperProps> = ({
     }
   }, [sessionState, onSessionStopped]);
 
+  useEffect(() => {
+    if (sessionState !== SessionState.DISCONNECTING) {
+      setCanRetryStop(false);
+      return;
+    }
+
+    const retryTimer = setTimeout(() => setCanRetryStop(true), 5000);
+    return () => clearTimeout(retryTimer);
+  }, [sessionState]);
+
   const handleEndCall = useCallback(() => {
-    stopSession();
+    setCanRetryStop(false);
+    void stopSession().catch(() => {
+      setCanRetryStop(true);
+      toast.error("No pudimos confirmar el cierre", {
+        description: "Reintentá para asegurar que la sesión quede finalizada.",
+      });
+    });
   }, [stopSession]);
 
   // Render based on widget state
@@ -1159,10 +1209,15 @@ const SessionWrapper: React.FC<SessionWrapperProps> = ({
     return <ConnectingScreen />;
   }
 
-  if (widgetState === WidgetState.CONNECTED) {
+  if (
+    widgetState === WidgetState.CONNECTED ||
+    sessionState === SessionState.DISCONNECTING
+  ) {
     return (
       <ConnectedSession
         onEndCall={handleEndCall}
+        isEnding={sessionState === SessionState.DISCONNECTING}
+        canRetryStop={canRetryStop}
         chromaKeyEnabled={chromaKeyEnabled}
         chromaSettings={chromaSettings}
       />

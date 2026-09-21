@@ -993,13 +993,16 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
   // Cleanup on unmount
   useEffect(() => {
     const session = sessionRef.current;
-    const stopOnPageHide = () => {
+    const stopOnPageUnload = () => {
       void session?.stop().catch(() => {
-        console.error("[SESSION] Cleanup during pagehide failed");
+        console.error("[SESSION] Cleanup during page unload failed");
       });
     };
 
-    window.addEventListener("pagehide", stopOnPageHide);
+    // Some embedded browsers emit pagehide when merely changing tabs. Ending
+    // there closes a healthy call. beforeunload is reserved for real
+    // navigation/close; React unmount remains the in-app cleanup path.
+    window.addEventListener("beforeunload", stopOnPageUnload);
 
     // Cancel the deferred stop scheduled by React Strict Mode's development
     // cleanup when the component is immediately mounted again.
@@ -1009,7 +1012,7 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
     }
 
     return () => {
-      window.removeEventListener("pagehide", stopOnPageHide);
+      window.removeEventListener("beforeunload", stopOnPageUnload);
       // Defer one task so a Strict Mode remount can cancel this. On a real
       // unmount the callback runs and closes the complete provider session.
       deferredSessionStopRef.current = setTimeout(() => {

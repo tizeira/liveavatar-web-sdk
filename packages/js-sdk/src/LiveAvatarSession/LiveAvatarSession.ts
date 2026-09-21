@@ -685,7 +685,7 @@ export class LiveAvatarSession extends (EventEmitter as new () => TypedEmitter<
       })
       .catch((error) => {
         // Keep DISCONNECTING and the caller's durable reservation intact. A
-        // later explicit stop or pagehide cleanup may safely retry.
+        // later explicit stop or page-unload cleanup may safely retry.
         this.stopFinalizationPromise = null;
         throw error;
       });

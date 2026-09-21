@@ -70,7 +70,7 @@ export class SessionAPIClient {
   public async stopSession(): Promise<void> {
     return await this.request(`/v1/sessions/stop`, {
       method: "POST",
-      // Let the browser finish the small terminal request during pagehide.
+      // Let the browser finish the small terminal request during page unload.
       keepalive: true,
     });
   }

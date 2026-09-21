@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useSession } from "next-auth/react";
 import ClaraVoiceAgent from "../src/components/ClaraVoiceAgent";
 import CustomerVerification from "../src/components/CustomerVerification";
@@ -29,22 +29,32 @@ type PageState =
   | "invalid_token"
   | "maintenance";
 
+const SHOPIFY_ACCESS_TIMEOUT_MS = 5000;
+
 export default function Home() {
   const { data: session, status: sessionStatus } = useSession();
   const [pageState, setPageState] = useState<PageState>("loading");
   const [customerData, setCustomerData] = useState<CustomerData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [shopifyAccessChecked, setShopifyAccessChecked] = useState(false);
+  const verifiedShopifyBuyerRef = useRef(false);
+  const shopifyAccessErrorRef = useRef(false);
 
   // Verify customer via Shopify API (for users coming from Shopify iframe)
   const verifyShopifyCustomer = useCallback(async (params: URLSearchParams) => {
     setPageState("verifying_shopify");
+    const controller = new AbortController();
+    const timeout = window.setTimeout(
+      () => controller.abort(),
+      SHOPIFY_ACCESS_TIMEOUT_MS,
+    );
 
     try {
       const response = await fetch("/api/shopify-access", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(buildShopifyAccessRequestBody(params)),
+        signal: controller.signal,
       });
 
       const data = await response.json();
@@ -53,6 +63,7 @@ export default function Home() {
       if (!response.ok) {
         if (response.status === 401) {
           // Invalid HMAC token
+          shopifyAccessErrorRef.current = true;
           setCustomerData({
             firstName: params.get("first_name") || undefined,
           });
@@ -61,6 +72,7 @@ export default function Home() {
         }
         if (response.status === 403 && !data.hasOrders) {
           // Valid token but no orders
+          shopifyAccessErrorRef.current = true;
           setCustomerData({
             firstName: params.get("first_name") || undefined,
             ordersCount: 0,
@@ -72,6 +84,7 @@ export default function Home() {
       }
 
       if (!data.valid || !data.hasOrders) {
+        shopifyAccessErrorRef.current = true;
         setCustomerData({
           firstName: params.get("first_name") || undefined,
           ordersCount: data.customer?.ordersCount || 0,
@@ -88,6 +101,7 @@ export default function Home() {
           lastOrderDate: data.customer.lastOrderDate,
         };
         setCustomerData(customer);
+        verifiedShopifyBuyerRef.current = true;
         // Credentials and personal URL parameters are no longer needed after
         // the server has exchanged them for an HttpOnly buyer ticket.
         window.history.replaceState({}, "", window.location.pathname);
@@ -95,17 +109,26 @@ export default function Home() {
       }
     } catch (err) {
       console.error("Shopify verification error:", err);
+      shopifyAccessErrorRef.current = true;
       setError(err instanceof Error ? err.message : "Error de verificacion");
       setPageState("error");
     } finally {
+      window.clearTimeout(timeout);
       setShopifyAccessChecked(true);
     }
   }, []);
 
   const restoreShopifyAccess = useCallback(async () => {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(
+      () => controller.abort(),
+      SHOPIFY_ACCESS_TIMEOUT_MS,
+    );
+
     try {
       const response = await fetch("/api/shopify-access", {
         cache: "no-store",
+        signal: controller.signal,
       });
       if (!response.ok) return false;
       const data = await response.json();
@@ -116,11 +139,20 @@ export default function Home() {
         lastOrderProduct: data.customer.lastOrderProduct || undefined,
         lastOrderDate: data.customer.lastOrderDate || undefined,
       });
+      verifiedShopifyBuyerRef.current = true;
       setPageState("verified");
       return true;
-    } catch {
+    } catch (err) {
+      shopifyAccessErrorRef.current = true;
+      setError(
+        err instanceof DOMException && err.name === "AbortError"
+          ? "La validación de acceso tardó demasiado"
+          : "No pudimos validar tu acceso en este momento",
+      );
+      setPageState("error");
       return false;
     } finally {
+      window.clearTimeout(timeout);
       setShopifyAccessChecked(true);
     }
   }, []);
@@ -265,6 +297,7 @@ export default function Home() {
 
     // Flow A: User coming from Shopify iframe with token
     if (params.has("shopify_token") && params.has("customer_id")) {
+      if (shopifyAccessErrorRef.current) return;
       verifyShopifyCustomer(params);
       return;
     }
@@ -273,6 +306,15 @@ export default function Home() {
       setPageState("loading");
       return;
     }
+
+    // A valid HttpOnly buyer ticket is sufficient. Do not let the unrelated
+    // NextAuth loading/unauthenticated state overwrite the restored access.
+    if (verifiedShopifyBuyerRef.current) {
+      setPageState("verified");
+      return;
+    }
+
+    if (shopifyAccessErrorRef.current) return;
 
     // Flow B: Check URL params for direct customer data (legacy support)
     const firstName = params.get("first_name");
@@ -343,13 +385,14 @@ export default function Home() {
     window.location.reload();
   }, []);
 
-  // Use ShopifyVerificationStates for loading, no_orders, invalid_token, maintenance
+  // Keep access verification states on the same short, mobile-first surface.
   if (
     pageState === "loading" ||
     pageState === "verifying_shopify" ||
     pageState === "verifying_session" ||
     pageState === "no_orders" ||
     pageState === "invalid_token" ||
+    pageState === "error" ||
     pageState === "maintenance"
   ) {
     const state: VerificationState =
@@ -363,116 +406,6 @@ export default function Home() {
         customerData={customerData || undefined}
         onRetry={handleRetry}
       />
-    );
-  }
-
-  // Error state - check if it's "no orders" to show promotional screen
-  if (pageState === "error") {
-    const isNoOrdersError = error?.includes("compra");
-
-    if (isNoOrdersError) {
-      // Promotional screen for users without purchases
-      return (
-        <div className="min-h-screen flex items-center justify-center p-4 landing-gradient">
-          <div className="text-center max-w-md card-ios relative z-10">
-            <div className="mx-auto mb-4 w-20 h-20 rounded-full avatar-ring-ios">
-              <svg
-                className="w-10 h-10"
-                style={{ color: "var(--platinum-700)" }}
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"
-                />
-              </svg>
-            </div>
-            <h2 className="text-2xl font-bold text-neutral-800 mb-3">
-              ¡Desbloquea a Clara!
-            </h2>
-            <p className="text-neutral-600 mb-6 leading-relaxed">
-              Clara es exclusiva para clientes de Beta Skin Tech.
-              <br />
-              <span className="font-semibold text-neutral-800">
-                Haz tu primera compra
-              </span>{" "}
-              y accede a tu asesora de skincare personal.
-            </p>
-            <a
-              href="https://betaskintech.com"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center px-6 py-3 btn-ios-primary rounded-2xl shadow-md font-medium"
-            >
-              <svg
-                className="w-5 h-5 mr-2"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"
-                />
-              </svg>
-              Ir a la tienda
-            </a>
-            <p className="mt-4">
-              <button
-                onClick={() => (window.location.href = "/login")}
-                className="text-sm text-neutral-500 hover:text-neutral-800 transition-colors font-medium"
-              >
-                Volver al inicio
-              </button>
-            </p>
-          </div>
-        </div>
-      );
-    }
-
-    // Generic error screen for other errors
-    return (
-      <div className="min-h-screen flex items-center justify-center p-4 landing-gradient">
-        <div className="text-center max-w-md card-ios relative z-10">
-          <div
-            className="mx-auto mb-4 w-16 h-16 rounded-full glass-morphism flex items-center justify-center"
-            style={{
-              background:
-                "linear-gradient(135deg, rgba(239, 68, 68, 0.1), rgba(220, 38, 38, 0.05))",
-            }}
-          >
-            <svg
-              className="w-8 h-8 text-red-600"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-              />
-            </svg>
-          </div>
-          <h2 className="text-xl font-semibold text-neutral-800 mb-2">
-            Error de verificacion
-          </h2>
-          <p className="text-neutral-600 mb-4">{error}</p>
-          <button
-            onClick={() => (window.location.href = "/login")}
-            className="px-6 py-3 btn-ios-primary rounded-2xl transition-all font-medium"
-          >
-            Volver al inicio
-          </button>
-        </div>
-      </div>
     );
   }
 

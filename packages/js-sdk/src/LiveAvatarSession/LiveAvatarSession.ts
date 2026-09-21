@@ -251,7 +251,7 @@ export class LiveAvatarSession extends (EventEmitter as new () => TypedEmitter<
     }
 
     try {
-      this.sessionClient.keepAlive();
+      await this.sessionClient.keepAlive();
     } catch (error) {
       console.error("Session keep alive error on server:", error);
       throw error;
@@ -660,6 +660,13 @@ export class LiveAvatarSession extends (EventEmitter as new () => TypedEmitter<
   }
 
   protected publishAgentControl(payload: object): void {
+    void this.publishAgentControlAndWait(payload).catch(() => {
+      // The synchronous command surface reports failures through diagnostics.
+      // Callers that need delivery settlement use publishAgentControlAndWait.
+    });
+  }
+
+  protected publishAgentControlAndWait(payload: object): Promise<void> {
     if (this.room.state !== "connected") {
       throw new Error(
         "LiveKit room not connected — cannot publish agent-control payload",
@@ -679,17 +686,20 @@ export class LiveAvatarSession extends (EventEmitter as new () => TypedEmitter<
       });
       // LiveKit resolves when the local publish operation settles. This is not
       // an acknowledgement that the connector or ElevenLabs received it.
-      void Promise.resolve(published).then(
-        () =>
+      return Promise.resolve(published).then(
+        () => {
           this.emitDiagnostic({
             event: SessionDiagnosticEvent.AGENT_CONTROL_PUBLISH_SETTLED,
             commandKind,
-          }),
-        () =>
+          });
+        },
+        (error) => {
           this.emitDiagnostic({
             event: SessionDiagnosticEvent.AGENT_CONTROL_PUBLISH_REJECTED,
             commandKind,
-          }),
+          });
+          throw error;
+        },
       );
     } catch (error) {
       this.emitDiagnostic({

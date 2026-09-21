@@ -148,6 +148,42 @@ describe("ElevenLabsAgentSession command publishing", () => {
     expect(payload.data).toEqual({ text: "user on pricing page" });
   });
 
+  it("waits for reliable local publish settlement before resolving", async () => {
+    const session = setupSession(elevenLabsToken);
+    await session.start();
+    const publishData = (session as any).room.localParticipant
+      .publishData as ReturnType<typeof vi.fn>;
+    let settle!: () => void;
+    publishData.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (settle = resolve)),
+    );
+
+    let resolved = false;
+    const pending = session
+      .sendContextualUpdateAndWait("ordered context")
+      .then(() => {
+        resolved = true;
+      });
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    settle();
+    await pending;
+    expect(resolved).toBe(true);
+  });
+
+  it("rejects the awaited command when local publish rejects", async () => {
+    const session = setupSession(elevenLabsToken);
+    await session.start();
+    const publishData = (session as any).room.localParticipant
+      .publishData as ReturnType<typeof vi.fn>;
+    publishData.mockRejectedValueOnce(new Error("publish rejected"));
+
+    await expect(session.sendUserMessageAndWait("[START]")).rejects.toThrow(
+      "publish rejected",
+    );
+  });
+
   it("publishes user_activity with no data field required", async () => {
     const session = setupSession(elevenLabsToken);
     await session.start();

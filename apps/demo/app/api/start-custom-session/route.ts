@@ -25,6 +25,7 @@ import { hashConsultationAccessToken } from "@/src/consultations/security";
 import {
   attachClaraLiveAvatarSession,
   cancelClaraBuyerSession,
+  CLARA_ACTIVE_SESSION_TTL_SECONDS,
   CLARA_BUYER_COOKIE_NAME,
   deriveAuthenticatedTesterKey,
   readClaraBuyerTicket,
@@ -112,6 +113,8 @@ export async function POST(request: NextRequest) {
   // Paid browser sessions use an opaque HttpOnly ticket issued only after a
   // purchase-aware Shopify verification. NextAuth remains a QA tester path.
   const session = await auth();
+  const testerUser =
+    process.env.VERCEL_ENV === "production" ? null : session?.user;
   let buyerTicket = null;
   try {
     buyerTicket = await readClaraBuyerTicket(
@@ -127,7 +130,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  if (!session?.user && !buyerTicket) {
+  if (!testerUser && !buyerTicket) {
     return new Response(
       JSON.stringify({
         error: "Unauthorized",
@@ -147,9 +150,9 @@ export async function POST(request: NextRequest) {
   const consultationAccessToken = randomBytes(32).toString("base64url");
   let shopifyCustomerKey = buyerTicket?.buyerKey;
   let rateLimitBuyerKey = shopifyCustomerKey;
-  if (!rateLimitBuyerKey && session?.user?.email && SHOPIFY_HMAC_SECRET) {
+  if (!rateLimitBuyerKey && testerUser?.email && SHOPIFY_HMAC_SECRET) {
     rateLimitBuyerKey = deriveAuthenticatedTesterKey(
-      session.user.email,
+      testerUser.email,
       SHOPIFY_HMAC_SECRET,
     );
     shopifyCustomerKey = rateLimitBuyerKey;
@@ -391,14 +394,20 @@ export async function POST(request: NextRequest) {
       logger.warn("[HEYGEN] Provider session creation timed out", null, {
         route: "/api/start-custom-session",
       });
-      await cancelReservation();
       return new Response(
         JSON.stringify({
           error: "La creación de la sesión demoró demasiado.",
           code: "HEYGEN_TIMEOUT",
           service: "heygen",
+          retryAfter: CLARA_ACTIVE_SESSION_TTL_SECONDS,
         }),
-        { status: 504, headers: { "Content-Type": "application/json" } },
+        {
+          status: 504,
+          headers: {
+            "Content-Type": "application/json",
+            "Retry-After": String(CLARA_ACTIVE_SESSION_TTL_SECONDS),
+          },
+        },
       );
     }
     const err = error as Error;
@@ -418,7 +427,6 @@ export async function POST(request: NextRequest) {
       { route: "/api/start-custom-session" },
     );
 
-    await cancelReservation();
     return new Response(
       JSON.stringify({
         error: err.message,
@@ -426,10 +434,14 @@ export async function POST(request: NextRequest) {
           ? "HEYGEN_NETWORK_ERROR"
           : "HEYGEN_UNEXPECTED_ERROR",
         service: "heygen",
+        retryAfter: CLARA_ACTIVE_SESSION_TTL_SECONDS,
       }),
       {
         status: 500,
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "Retry-After": String(CLARA_ACTIVE_SESSION_TTL_SECONDS),
+        },
       },
     );
   }
@@ -438,16 +450,19 @@ export async function POST(request: NextRequest) {
     logger.error("[HEYGEN] Empty session token received", null, {
       route: "/api/start-custom-session",
     });
-    await cancelReservation();
     return new Response(
       JSON.stringify({
         error: "Failed to retrieve session token",
         code: "HEYGEN_EMPTY_TOKEN",
         service: "heygen",
+        retryAfter: CLARA_ACTIVE_SESSION_TTL_SECONDS,
       }),
       {
         status: 500,
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "Retry-After": String(CLARA_ACTIVE_SESSION_TTL_SECONDS),
+        },
       },
     );
   }

@@ -55,6 +55,35 @@ export class ElevenLabsAgentSession extends LiveAvatarSession {
     payload: ElevenLabsAgentCommandPayload,
     options?: { sourceEventId?: string },
   ): string {
+    const { eventId, wrapper } = this.createElevenLabsAgentCommand(
+      payload,
+      options,
+    );
+    this.publishAgentControl(wrapper);
+    return eventId;
+  }
+
+  /**
+   * Publish an ElevenLabs command and wait until LiveKit settles the reliable
+   * local data-channel operation. This is not a connector acknowledgement, but
+   * it guarantees ordering before the caller publishes the next command.
+   */
+  public async sendElevenLabsAgentCommandAndWait(
+    payload: ElevenLabsAgentCommandPayload,
+    options?: { sourceEventId?: string },
+  ): Promise<string> {
+    const { eventId, wrapper } = this.createElevenLabsAgentCommand(
+      payload,
+      options,
+    );
+    await this.publishAgentControlAndWait(wrapper);
+    return eventId;
+  }
+
+  private createElevenLabsAgentCommand(
+    payload: ElevenLabsAgentCommandPayload,
+    options?: { sourceEventId?: string },
+  ): { eventId: string; wrapper: ElevenLabsAgentCommandEvent } {
     if (!this.assertConnected()) {
       throw new ElevenLabsAgentSessionError(
         "Session must be connected before sending ElevenLabs agent commands",
@@ -67,17 +96,15 @@ export class ElevenLabsAgentSession extends LiveAvatarSession {
       );
     }
 
-    const event_id = this.generateEventId();
+    const eventId = this.generateEventId();
     const wrapper: ElevenLabsAgentCommandEvent = {
       event_type: CommandEventsEnum.ELEVENLABS_AGENT_COMMAND,
-      event_id,
+      event_id: eventId,
       session_id: sessionId,
       source_event_id: options?.sourceEventId ?? null,
       ...payload,
     } as ElevenLabsAgentCommandEvent;
-
-    this.publishAgentControl(wrapper);
-    return event_id;
+    return { eventId, wrapper };
   }
 
   /** Send a user message — equivalent to typing in the ElevenLabs widget. */
@@ -88,9 +115,25 @@ export class ElevenLabsAgentSession extends LiveAvatarSession {
     });
   }
 
+  /** Send a user message after reliable local publish settlement. */
+  public sendUserMessageAndWait(text: string): Promise<string> {
+    return this.sendElevenLabsAgentCommandAndWait({
+      elevenlabs_event_type: ElevenLabsAgentCommandType.USER_MESSAGE,
+      data: { text },
+    });
+  }
+
   /** Send a contextual update — silent context the agent can use. */
   public sendContextualUpdate(text: string): string {
     return this.sendElevenLabsAgentCommand({
+      elevenlabs_event_type: ElevenLabsAgentCommandType.CONTEXTUAL_UPDATE,
+      data: { text },
+    });
+  }
+
+  /** Send context after reliable local publish settlement. */
+  public sendContextualUpdateAndWait(text: string): Promise<string> {
+    return this.sendElevenLabsAgentCommandAndWait({
       elevenlabs_event_type: ElevenLabsAgentCommandType.CONTEXTUAL_UPDATE,
       data: { text },
     });

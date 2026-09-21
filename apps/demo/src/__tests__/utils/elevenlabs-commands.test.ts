@@ -55,13 +55,19 @@ describe("formatRelativeDate", () => {
   });
 });
 
-import { sendCustomerContext } from "@/src/utils/heygen/elevenlabs-commands";
+import {
+  sendCustomerContext,
+  sendCustomerContextAndWait,
+} from "@/src/utils/heygen/elevenlabs-commands";
 
 // Minimal fake session capturing the contextual_update text
 function makeFakeSession() {
   const calls: string[] = [];
   const session = {
     sendContextualUpdate: (text: string) => {
+      calls.push(text);
+    },
+    sendContextualUpdateAndWait: async (text: string) => {
       calls.push(text);
     },
   };
@@ -184,5 +190,29 @@ describe("sendCustomerContext - recent purchase", () => {
     expect(calls[0]).toContain("confirmación explícita");
     expect(calls[0]).toContain("saved:true");
     expect(calls[0]).not.toContain("Antecedentes de conversaciones previas");
+  });
+
+  it("waits for the contextual update publish before resolving", async () => {
+    let settle!: () => void;
+    const session = {
+      sendContextualUpdateAndWait: vi.fn(
+        () =>
+          new Promise<string>((resolve) => (settle = () => resolve("event"))),
+      ),
+    };
+    let resolved = false;
+    const pending = sendCustomerContextAndWait(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      session as any,
+      { firstName: "Ana" },
+    ).then(() => {
+      resolved = true;
+    });
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    settle();
+    await pending;
+    expect(resolved).toBe(true);
   });
 });

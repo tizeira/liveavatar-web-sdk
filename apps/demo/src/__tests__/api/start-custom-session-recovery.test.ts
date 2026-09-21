@@ -2,12 +2,15 @@ import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
 const mocks = vi.hoisted(() => ({
+  auth: vi.fn(),
+  readTicket: vi.fn(),
+  deriveTesterKey: vi.fn(),
   reserve: vi.fn(),
   cancel: vi.fn(),
   attach: vi.fn(),
   fetch: vi.fn(),
 }));
-vi.mock("@/auth", () => ({ auth: vi.fn().mockResolvedValue(null) }));
+vi.mock("@/auth", () => ({ auth: mocks.auth }));
 vi.mock("@/app/api/secrets", () => ({
   API_KEY: "test-only",
   API_URL: "https://provider.invalid",
@@ -37,9 +40,10 @@ vi.mock("@/src/consultations/security", () => ({
   hashConsultationAccessToken: vi.fn().mockReturnValue("test-hash"),
 }));
 vi.mock("@/src/lib/clara-buyer-access", () => ({
+  CLARA_ACTIVE_SESSION_TTL_SECONDS: 720,
   CLARA_BUYER_COOKIE_NAME: "clara_buyer_access",
-  readClaraBuyerTicket: vi.fn().mockResolvedValue({ buyerKey: "test-buyer" }),
-  deriveAuthenticatedTesterKey: vi.fn(),
+  readClaraBuyerTicket: mocks.readTicket,
+  deriveAuthenticatedTesterKey: mocks.deriveTesterKey,
   reserveClaraBuyerSession: mocks.reserve,
   cancelClaraBuyerSession: mocks.cancel,
   attachClaraLiveAvatarSession: mocks.attach,
@@ -54,7 +58,11 @@ const request = () =>
 describe("provider failure recovery (offline, mocked persistence)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubEnv("VERCEL_ENV", "preview");
     vi.stubGlobal("fetch", mocks.fetch);
+    mocks.auth.mockResolvedValue(null);
+    mocks.readTicket.mockResolvedValue({ buyerKey: "test-buyer" });
+    mocks.deriveTesterKey.mockReturnValue("test-tester");
     mocks.reserve.mockResolvedValue({
       ok: true,
       remaining: 2,
@@ -65,7 +73,36 @@ describe("provider failure recovery (offline, mocked persistence)", () => {
   });
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllEnvs();
     vi.unstubAllGlobals();
+  });
+
+  it("rejects a Google tester session without a buyer ticket in production", async () => {
+    vi.stubEnv("VERCEL_ENV", "production");
+    mocks.auth.mockResolvedValue({ user: { email: "tester@example.com" } });
+    mocks.readTicket.mockResolvedValue(null);
+
+    const response = await POST(request());
+    expect(response.status).toBe(401);
+    expect(mocks.reserve).not.toHaveBeenCalled();
+    expect(mocks.fetch).not.toHaveBeenCalled();
+  });
+
+  it("keeps the authenticated tester path available in preview", async () => {
+    mocks.auth.mockResolvedValue({ user: { email: "tester@example.com" } });
+    mocks.readTicket.mockResolvedValue(null);
+    mocks.fetch.mockResolvedValueOnce(
+      Response.json({
+        data: { session_token: "test-token", session_id: "test-session" },
+      }),
+    );
+
+    const response = await POST(request());
+    expect(response.status).toBe(200);
+    expect(mocks.deriveTesterKey).toHaveBeenCalledWith(
+      "tester@example.com",
+      "test-only",
+    );
   });
 
   it.each([402, 429, 503])(
@@ -97,21 +134,23 @@ describe("provider failure recovery (offline, mocked persistence)", () => {
       expect(mocks.attach).toHaveBeenCalledOnce();
     },
   );
-  it("cancels after a network exception", async () => {
+  it("keeps the reservation after an ambiguous network exception", async () => {
     mocks.fetch.mockRejectedValueOnce(new Error("fetch failed"));
     const response = await POST(request());
     expect(response.status).toBe(500);
-    expect((await response.json()).code).toBe("HEYGEN_NETWORK_ERROR");
-    expect(mocks.cancel).toHaveBeenCalledOnce();
+    const body = await response.json();
+    expect(body.code).toBe("HEYGEN_NETWORK_ERROR");
+    expect(body.retryAfter).toBe(720);
+    expect(mocks.cancel).not.toHaveBeenCalled();
   });
-  it("cancels after an empty provider token", async () => {
+  it("keeps the reservation after an ambiguous empty provider token", async () => {
     mocks.fetch.mockResolvedValueOnce(
       Response.json({ data: { session_id: "test-session" } }),
     );
     const response = await POST(request());
     expect(response.status).toBe(500);
     expect((await response.json()).code).toBe("HEYGEN_EMPTY_TOKEN");
-    expect(mocks.cancel).toHaveBeenCalledOnce();
+    expect(mocks.cancel).not.toHaveBeenCalled();
   });
   it("does not contact the provider when the buyer already has an active session", async () => {
     mocks.reserve.mockResolvedValueOnce({
@@ -124,7 +163,7 @@ describe("provider failure recovery (offline, mocked persistence)", () => {
     expect(mocks.cancel).not.toHaveBeenCalled();
   });
 
-  it("times out and cancels a hung provider fetch without retrying it", async () => {
+  it("times out and keeps the reservation for a hung provider fetch", async () => {
     vi.useFakeTimers();
     let signal: AbortSignal | undefined;
     mocks.fetch.mockImplementationOnce((_url: string, init?: RequestInit) => {
@@ -143,7 +182,7 @@ describe("provider failure recovery (offline, mocked persistence)", () => {
     expect(response.status).toBe(504);
     expect((await response.json()).code).toBe("HEYGEN_TIMEOUT");
     expect(mocks.fetch).toHaveBeenCalledOnce();
-    expect(mocks.cancel).toHaveBeenCalledOnce();
+    expect(mocks.cancel).not.toHaveBeenCalled();
     expect(signal?.aborted).toBe(true);
   });
 
@@ -172,11 +211,11 @@ describe("provider failure recovery (offline, mocked persistence)", () => {
     expect(response.status).toBe(504);
     expect((await response.json()).code).toBe("HEYGEN_TIMEOUT");
     expect(mocks.fetch).toHaveBeenCalledOnce();
-    expect(mocks.cancel).toHaveBeenCalledOnce();
+    expect(mocks.cancel).not.toHaveBeenCalled();
     expect(signal?.aborted).toBe(true);
   });
 
-  it("times out and cancels when the provider response body never resolves", async () => {
+  it("times out and keeps the reservation when the response body never resolves", async () => {
     vi.useFakeTimers();
     let signal: AbortSignal | undefined;
     mocks.fetch.mockImplementationOnce((_url: string, init?: RequestInit) => {
@@ -194,7 +233,7 @@ describe("provider failure recovery (offline, mocked persistence)", () => {
     expect(response.status).toBe(504);
     expect((await response.json()).code).toBe("HEYGEN_TIMEOUT");
     expect(mocks.fetch).toHaveBeenCalledOnce();
-    expect(mocks.cancel).toHaveBeenCalledOnce();
+    expect(mocks.cancel).not.toHaveBeenCalled();
     expect(signal?.aborted).toBe(true);
   });
 });

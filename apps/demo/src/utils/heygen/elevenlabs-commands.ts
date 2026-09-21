@@ -89,19 +89,18 @@ function formatPreviousConsultationDate(iso: string, now: Date): string {
  *
  * Replaces `dynamic_variables` (which are blocked by the plugin).
  */
-export function sendCustomerContext(
-  session: ElevenLabsAgentSession,
-  context: {
-    firstName?: string;
-    skinType?: string;
-    skinConcerns?: string[];
-    ordersCount?: number;
-    lastOrderProduct?: string;
-    lastOrderDate?: string;
-    conversationMemory?: ClaraConversationMemory;
-    clock?: Clock;
-  },
-): void {
+interface CustomerContext {
+  firstName?: string;
+  skinType?: string;
+  skinConcerns?: string[];
+  ordersCount?: number;
+  lastOrderProduct?: string;
+  lastOrderDate?: string;
+  conversationMemory?: ClaraConversationMemory;
+  clock?: Clock;
+}
+
+function buildCustomerContext(context: CustomerContext): string {
   const now = context.clock?.() ?? new Date();
   const parts: string[] = [formatConsultationTime(now)];
 
@@ -163,11 +162,18 @@ export function sendCustomerContext(
   );
 
   if (parts.length === 0) {
-    console.log("[EL-CMD] No customer context to send, skipping");
-    return;
+    return "";
   }
 
-  const text = parts.join(" ");
+  return parts.join(" ");
+}
+
+export function sendCustomerContext(
+  session: ElevenLabsAgentSession,
+  context: CustomerContext,
+): void {
+  const text = buildCustomerContext(context);
+  if (!text) return;
   console.log(`[EL-CMD] Sending contextual_update (${text.length} chars)`);
 
   try {
@@ -175,4 +181,16 @@ export function sendCustomerContext(
   } catch (err) {
     console.error("[EL-CMD] Failed to send contextual_update:", err);
   }
+}
+
+export async function sendCustomerContextAndWait(
+  session: ElevenLabsAgentSession,
+  context: CustomerContext,
+): Promise<void> {
+  const text = buildCustomerContext(context);
+  if (!text) return;
+  console.log(
+    `[EL-CMD] Sending contextual_update with delivery settlement (${text.length} chars)`,
+  );
+  await session.sendContextualUpdateAndWait(text);
 }

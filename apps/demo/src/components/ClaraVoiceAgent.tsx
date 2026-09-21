@@ -21,7 +21,7 @@ import {
   CustomerData,
 } from "../liveavatar";
 import { useScreenSize, useFixedHeight } from "../hooks";
-import { sendCustomerContext } from "../utils/heygen/elevenlabs-commands";
+import { sendCustomerContextAndWait } from "../utils/heygen/elevenlabs-commands";
 import { waitForMediaPlaybackReady } from "../utils/media-playback-readiness";
 import { useChromaKey } from "../hooks/useChromaKey";
 import type { ChromaKeyConfig } from "../hooks/useChromaKey";
@@ -646,8 +646,8 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
   // Why two steps: contextual_update is purely silent (stores info, doesn't
   // trigger a response). sendUserMessage simulates a user message which DOES
   // trigger a response — that response will use the context from step 2a.
-  // The 150ms delay between them ensures the agent processes the context
-  // BEFORE the trigger message, so the response is personalized.
+  // Reliable LiveKit publishes are awaited in order. This proves local publish
+  // settlement (not connector ingestion) and avoids timer-based ordering.
   //
   // REQUIRES: ElevenLabs agent dashboard → "First message" must be EMPTY.
   useEffect(() => {
@@ -664,31 +664,49 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
 
     console.info("[PLUGIN] Sending context and greeting trigger");
 
-    // 2a. Silent customer info — no response triggered
-    sendCustomerContext(session, {
-      firstName: customerData?.firstName,
-      skinType: customerData?.skinType,
-      skinConcerns: customerData?.skinConcerns,
-      ordersCount: customerData?.ordersCount,
-      lastOrderProduct: customerData?.lastOrderProduct,
-      lastOrderDate: customerData?.lastOrderDate,
-      conversationMemory: customerData?.conversationMemory,
-    });
+    let cancelled = false;
+    const initializeGreeting = async () => {
+      const context = {
+        firstName: customerData?.firstName,
+        skinType: customerData?.skinType,
+        skinConcerns: customerData?.skinConcerns,
+        ordersCount: customerData?.ordersCount,
+        lastOrderProduct: customerData?.lastOrderProduct,
+        lastOrderDate: customerData?.lastOrderDate,
+        conversationMemory: customerData?.conversationMemory,
+      };
 
-    // 2b. Trigger response 150ms later (gives agent time to ingest context).
-    // "Hola" simulates a user message — invisible in our UI but visible in EL logs.
-    const triggerTimer = setTimeout(() => {
+      // Contextual updates are idempotent, so retry one rejected local publish.
       try {
-        console.info("[PLUGIN] Sending greeting trigger");
-        sendServerLog("greeting_triggered");
-        session.sendUserMessage("[START]");
+        await sendCustomerContextAndWait(session, context);
       } catch {
-        console.error("[PLUGIN] greeting trigger failed");
+        console.warn("[PLUGIN] Context publish rejected; retrying once");
+        try {
+          await sendCustomerContextAndWait(session, context);
+        } catch {
+          hasSentContextRef.current = false;
+          console.error("[PLUGIN] Context publish failed after retry");
+          sendServerLog("greeting_trigger_failed", "error");
+          return;
+        }
+      }
+
+      if (cancelled) return;
+      try {
+        console.info("[PLUGIN] Sending greeting trigger after context settled");
+        await session.sendUserMessageAndWait("[START]");
+        if (!cancelled) sendServerLog("greeting_triggered");
+      } catch {
+        hasSentContextRef.current = false;
+        console.error("[PLUGIN] greeting trigger publish failed");
         sendServerLog("greeting_trigger_failed", "error");
       }
-    }, 150);
+    };
+    void initializeGreeting();
 
-    return () => clearTimeout(triggerTimer);
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isStreamReady, isMediaPlaybackReady, isVoiceChatReady, customerData]);
 
@@ -914,7 +932,7 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
     return () => abortController.abort();
   }, [isStreamReady, attachElement, chromaKeyEnabled]);
 
-  // Keep-alive interval to prevent HeyGen session timeout
+  // Keep-alive with margin before the provider's five-minute boundary.
   useEffect(() => {
     const session = sessionRef.current;
     if (!session) return;
@@ -926,7 +944,7 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
           .then(() => console.log("[HEYGEN] Keep-alive sent"))
           .catch(() => console.warn("[HEYGEN] Keep-alive failed"));
       },
-      5 * 60 * 1000,
+      4 * 60 * 1000,
     );
 
     return () => {

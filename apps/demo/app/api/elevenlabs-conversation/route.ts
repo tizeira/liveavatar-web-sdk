@@ -14,6 +14,15 @@ function identifierSuffix(value: unknown): string | null {
 }
 
 export async function POST(request: Request) {
+  // This legacy direct-ElevenLabs path exists only for QA. Production uses the
+  // purchase-gated LiveAvatar LITE connector endpoint.
+  if (process.env.VERCEL_ENV === "production") {
+    return new Response(JSON.stringify({ error: "Not found" }), {
+      status: 404,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
   // === RATE LIMIT CHECK ===
   const limitResult = await rateLimitByEndpoint(
     request as NextRequest,

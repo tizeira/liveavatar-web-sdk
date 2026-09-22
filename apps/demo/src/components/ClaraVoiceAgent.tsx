@@ -71,7 +71,9 @@ type SafeClientTelemetryEvent =
   | "greeting_completed"
   | "microphone_ready"
   | "microphone_unmute_failed"
-  | "agent_event_observed";
+  | "media_ready"
+  | "media_ready_timeout"
+  | "connection_quality_bad";
 
 // ============================================
 // SESSION LIMIT CONFIGURATION
@@ -767,85 +769,20 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
       console.log("[DIAG] Sending test message via sendUserMessage...");
       session.sendUserMessage("Hola, me puedes escuchar?");
       console.log("[DIAG] sendUserMessage sent ✓");
-      sendServerLog("agent_event_observed");
     } catch {
       console.error("[DIAG] sendUserMessage failed");
-      sendServerLog("agent_event_observed", "error");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // === DIAGNOSTIC: Log ALL SDK agent events (exhaustive) ===
+  // Keep production diagnostics bounded. The former catch-all monkeypatch
+  // logged every provider/VAD event and could add main-thread pressure while
+  // displacing the lifecycle signals needed to investigate media problems.
   useEffect(() => {
-    const session = sessionRef.current;
-    if (!session) return;
-
-    // Event names are useful for lifecycle diagnosis; event payloads can contain
-    // transcripts or identifiers and must not be logged client- or server-side.
-    const logEvt = (tag: string) => {
-      console.info(`[EVT] ${tag.slice(0, 64)}`);
-      sendServerLog("agent_event_observed");
-    };
-
-    // Listen for EVERY known AgentEventsEnum
-    const handlers: Array<[string, (...args: unknown[]) => void]> = [
-      [
-        AgentEventsEnum.ELEVENLABS_AGENT_EVENT,
-        (e: unknown) => {
-          const ev = e as Record<string, unknown>;
-          logEvt(`EL:${String(ev.elevenlabs_event_type || "unknown")}`);
-        },
-      ],
-      [AgentEventsEnum.USER_SPEAK_STARTED, () => logEvt("USER_SPEAK_STARTED")],
-      [AgentEventsEnum.USER_SPEAK_ENDED, () => logEvt("USER_SPEAK_ENDED")],
-      [AgentEventsEnum.USER_TRANSCRIPTION, () => logEvt("USER_TRANSCRIPTION")],
-      [AgentEventsEnum.USER_TRANSCRIPTION_CHUNK, () => logEvt("USER_TX_CHUNK")],
-      [
-        AgentEventsEnum.AVATAR_SPEAK_STARTED,
-        () => logEvt("AVATAR_SPEAK_STARTED"),
-      ],
-      [AgentEventsEnum.AVATAR_SPEAK_ENDED, () => logEvt("AVATAR_SPEAK_ENDED")],
-      [AgentEventsEnum.AVATAR_TRANSCRIPTION, () => logEvt("AVATAR_TX")],
-      [
-        AgentEventsEnum.AVATAR_TRANSCRIPTION_CHUNK,
-        () => logEvt("AVATAR_TX_CHUNK"),
-      ],
-      [AgentEventsEnum.SESSION_STOPPED, () => logEvt("SESSION_STOPPED")],
-    ];
-
-    for (const [evt, handler] of handlers) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      session.on(evt as any, handler as any);
-    }
-
-    // CRITICAL: Catch-all for ANY emitted event (EventEmitter wildcard via monkeypatch)
-    // This will show us if events arrive with unexpected names
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const sessionAny = session as any;
-    const origEmit = sessionAny.emit.bind(session);
-    sessionAny.emit = (event: string, ...args: unknown[]) => {
-      // Only log agent-related events, skip noisy internal ones
-      if (
-        typeof event === "string" &&
-        !event.startsWith("session.state") &&
-        !event.startsWith("voicechat")
-      ) {
-        console.info(`[EMIT] ${event.slice(0, 64)}`);
-        sendServerLog("agent_event_observed");
-      }
-      return origEmit(event, ...args);
-    };
-
-    return () => {
-      for (const [evt, handler] of handlers) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        session.off(evt as any, handler as any);
-      }
-      // Restore original emit
-      sessionAny.emit = origEmit;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    if (connectionQuality !== ConnectionQuality.BAD) return;
+    console.warn("[RTC] Connection quality degraded");
+    sendServerLog("connection_quality_bad", "warn");
+  }, [connectionQuality, sendServerLog]);
 
   // === UI STATE: Derive "thinking" from SDK events ===
   useEffect(() => {
@@ -921,8 +858,10 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
 
         if (result.reason === "timeout") {
           console.warn(metric);
+          sendServerLog("media_ready_timeout", "warn");
         } else {
           console.info(metric);
+          sendServerLog("media_ready");
         }
         setIsMediaPlaybackReady(true);
       })
@@ -934,7 +873,7 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
       });
 
     return () => abortController.abort();
-  }, [isStreamReady, attachElement, chromaKeyEnabled]);
+  }, [isStreamReady, attachElement, chromaKeyEnabled, sendServerLog]);
 
   // Keep-alive with margin before the provider's five-minute boundary.
   useEffect(() => {
@@ -1750,6 +1689,12 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
             setRecapView("summary");
             return;
           }
+          if (!cancelled && result.status === "failed") {
+            setConsultationProcessingError(
+              "No pudimos procesar el resumen de esta conversación.",
+            );
+            return;
+          }
         }
       } catch {
         // ElevenLabs analysis is asynchronous; transient failures are retried.
@@ -1758,7 +1703,7 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
       if (cancelled) return;
       if (attempts >= 30) {
         setConsultationProcessingError(
-          "El resumen está tardando más de lo esperado. La conversación quedó guardada para procesarla.",
+          "La conversación terminó correctamente. El resumen sigue procesándose y aparecerá cuando esté listo.",
         );
         return;
       }

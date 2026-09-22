@@ -187,7 +187,22 @@ describe("Clara buyer access", () => {
     ).resolves.toBe(false);
   });
 
-  it("treats an already terminal consultation as an idempotent release", async () => {
+  it("releases an active consultation into post-call processing", async () => {
+    mockUpdateMany.mockResolvedValueOnce({ count: 1 });
+    await expect(
+      access.releaseClaraBuyerSession("test-buyer", "test-consultation"),
+    ).resolves.toBe(true);
+    expect(mockUpdateMany).toHaveBeenCalledWith({
+      where: {
+        id: "test-consultation",
+        shopifyCustomerKey: "test-buyer",
+        status: { in: ["pending", "routine_ready"] },
+      },
+      data: { status: "processing" },
+    });
+  });
+
+  it("treats an already released or terminal consultation as idempotent", async () => {
     mockUpdateMany.mockResolvedValueOnce({ count: 0 });
     mockFindFirst.mockResolvedValueOnce({ id: "test-consultation" });
     await expect(
@@ -197,7 +212,7 @@ describe("Clara buyer access", () => {
       where: {
         id: "test-consultation",
         shopifyCustomerKey: "test-buyer",
-        status: { in: ["completed", "failed"] },
+        status: { in: ["processing", "completed", "failed"] },
       },
       select: { id: true },
     });

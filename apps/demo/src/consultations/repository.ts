@@ -86,7 +86,9 @@ export async function saveClaraRoutine(
         status:
           existing.status === ClaraConsultationStatus.completed
             ? ClaraConsultationStatus.completed
-            : ClaraConsultationStatus.routine_ready,
+            : existing.status === ClaraConsultationStatus.processing
+              ? ClaraConsultationStatus.processing
+              : ClaraConsultationStatus.routine_ready,
       },
     });
     const routineMetricClaim =
@@ -280,6 +282,7 @@ export async function getRecentClaraConversationMemory(
       status: {
         in: [
           ClaraConsultationStatus.routine_ready,
+          ClaraConsultationStatus.processing,
           ClaraConsultationStatus.completed,
         ],
       },

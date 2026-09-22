@@ -13,6 +13,7 @@ import {
   hashConsultationAccessToken,
   verifyConsultationAccessToken,
 } from "@/src/consultations/security";
+import { releaseClaraBuyerSession } from "@/src/lib/clara-buyer-access";
 
 const enabled = process.env.RUN_NEON_INTEGRATION === "1";
 const firstId = "c0dec0de-0000-4000-8000-000000000001";
@@ -54,6 +55,11 @@ describe.skipIf(!enabled)("Clara repository against isolated Neon QA", () => {
     expect(
       verifyConsultationAccessToken("wrong", pending!.accessTokenHash),
     ).toBe(false);
+
+    await expect(releaseClaraBuyerSession(customerA, firstId)).resolves.toBe(
+      true,
+    );
+    expect((await getClaraConsultation(firstId))?.status).toBe("processing");
 
     const completion = {
       consultationId: firstId,

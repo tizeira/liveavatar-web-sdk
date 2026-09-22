@@ -16,7 +16,9 @@ const SAFE_CLIENT_EVENTS = new Set([
   "greeting_completed",
   "microphone_ready",
   "microphone_unmute_failed",
-  "agent_event_observed",
+  "media_ready",
+  "media_ready_timeout",
+  "connection_quality_bad",
 ]);
 
 const SAFE_DEVICES = new Set(["desktop", "mobile", "unknown"]);

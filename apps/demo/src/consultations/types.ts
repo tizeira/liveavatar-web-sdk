@@ -36,7 +36,7 @@ export type ClaraSavedRoutine = {
 
 export type ClaraConsultationResult = {
   consultationId: string;
-  status: "pending" | "routine_ready" | "completed" | "failed";
+  status: "pending" | "routine_ready" | "processing" | "completed" | "failed";
   summary: string | null;
   routine: ClaraRoutine | null;
   transcript: ClaraTranscriptTurn[];

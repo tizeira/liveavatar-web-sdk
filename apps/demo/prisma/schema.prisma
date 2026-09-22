@@ -12,6 +12,7 @@ datasource db {
 enum ClaraConsultationStatus {
   pending
   routine_ready
+  processing
   completed
   failed
 }

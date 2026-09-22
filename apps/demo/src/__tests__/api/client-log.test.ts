@@ -46,6 +46,17 @@ describe("client telemetry relay", () => {
     expect(response.status).toBe(400);
   });
 
+  it("accepts a bounded media diagnostic event", async () => {
+    vi.stubEnv("VERCEL_ENV", "preview");
+    const route = await import("@/app/api/client-log/route");
+
+    const response = await route.POST(
+      post({ event: "connection_quality_bad", level: "warn" }),
+    );
+
+    expect(response.status).toBe(200);
+  });
+
   it("rejects an unknown device value", async () => {
     vi.stubEnv("VERCEL_ENV", "preview");
     const route = await import("@/app/api/client-log/route");

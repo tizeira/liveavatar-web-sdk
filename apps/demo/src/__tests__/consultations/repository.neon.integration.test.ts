@@ -83,16 +83,31 @@ describe.skipIf(!enabled)("Clara repository against isolated Neon QA", () => {
         },
       ],
     };
-    await saveClaraRoutine(
+    const firstSave = await saveClaraRoutine(
       firstId,
       "Cliente Iván Tizeira consultó por hidratación",
       routine,
     );
-    await saveClaraRoutine(
+    const secondSave = await saveClaraRoutine(
       firstId,
-      "Cliente Iván Tizeira consultó por hidratación",
-      routine,
+      "Este resumen repetido no debe reemplazar el original",
+      {
+        concerns: ["replacement"],
+        cautions: [],
+        steps: [
+          {
+            moment: "evening",
+            order: 1,
+            instruction: "No debe persistirse.",
+            product: null,
+          },
+        ],
+      },
     );
+
+    expect(firstSave.created).toBe(true);
+    expect(secondSave.created).toBe(false);
+    expect(secondSave.consultation.routine).toEqual(routine);
 
     expect((await getLatestClaraConsultation(customerA))?.routine).toEqual(
       routine,

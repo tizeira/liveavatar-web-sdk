@@ -2,7 +2,7 @@
   "tool_config": {
     "type": "webhook",
     "name": "guardar_rutina_clara",
-    "description": "Guarda el resumen y la rutina acordada. Llamar una sola vez al cerrar la consulta, después de confirmar con la persona los pasos. Los product_handle deben provenir exactamente de buscar_productos_shopify.",
+    "description": "Guarda el resumen y la rutina acordada. Llamar una sola vez al cerrar la consulta, después de confirmar con la persona los pasos. Los product_handle deben provenir exactamente de buscar_productos_shopify. Si la respuesta indica already_saved=true, no se modificó la rutina y no se debe anunciar otro guardado.",
     "response_timeout_secs": 15,
     "api_schema": {
       "url": "https://testers.betaskintech.com/api/agent-tools/save-routine",

@@ -78,8 +78,11 @@ export async function saveClaraRoutine(
         routineMetricRecordedAt: true,
       },
     });
-    const updated = await tx.claraConsultation.update({
-      where: { id: consultationId },
+    const write = await tx.claraConsultation.updateMany({
+      where: {
+        id: consultationId,
+        routine: { equals: Prisma.DbNull },
+      },
       data: {
         summary: sanitizeUserFacingSummary(summary),
         routine: routine as unknown as Prisma.InputJsonValue,
@@ -91,8 +94,12 @@ export async function saveClaraRoutine(
               : ClaraConsultationStatus.routine_ready,
       },
     });
+    const updated = await tx.claraConsultation.findUniqueOrThrow({
+      where: { id: consultationId },
+    });
+    const created = write.count === 1;
     const routineMetricClaim =
-      existing.status === ClaraConsultationStatus.completed
+      created && existing.status === ClaraConsultationStatus.completed
         ? await tx.claraConsultation.updateMany({
             where: {
               id: consultationId,
@@ -110,7 +117,7 @@ export async function saveClaraRoutine(
         update: { consultationsWithRoutine: { increment: 1 } },
       });
     }
-    return updated;
+    return { consultation: updated, created };
   });
 }
 

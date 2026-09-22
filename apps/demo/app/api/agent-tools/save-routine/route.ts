@@ -66,6 +66,7 @@ export async function POST(request: NextRequest) {
 
   const steps: ClaraRoutineStep[] = [];
   const rejectedProductHandles: string[] = [];
+  const missingProductHandleSteps: number[] = [];
   const requestedHandles = rawSteps.flatMap((rawStep) => {
     if (!rawStep || typeof rawStep !== "object") return [];
     const handle = cleanText(
@@ -95,6 +96,15 @@ export async function POST(request: NextRequest) {
     const productHandle = cleanText(input.product_handle, 255).toLowerCase();
     if (!validMoments.has(moment) || !instruction) continue;
 
+    // Product names from Clara's own brand must always be tied to a catalog
+    // handle. Generic care steps (cleanser, sunscreen, etc.) may remain
+    // product-less, but a named Beta recommendation may not be persisted as
+    // unverified prose.
+    if (!productHandle && /\bbeta(?:\s|[-–—])/i.test(instruction)) {
+      missingProductHandleSteps.push(index + 1);
+      continue;
+    }
+
     let product = null;
     if (productHandle) {
       product = verifiedProducts.get(productHandle) || null;
@@ -114,6 +124,30 @@ export async function POST(request: NextRequest) {
       ...(frequency ? { frequency } : {}),
       product,
     });
+  }
+
+  if (missingProductHandleSteps.length) {
+    return NextResponse.json(
+      {
+        error:
+          "Every named Beta Skintech product must include the exact product_handle returned by the catalog search.",
+        code: "product_handle_required",
+        invalid_steps: missingProductHandleSteps,
+      },
+      { status: 422 },
+    );
+  }
+
+  if (rejectedProductHandles.length) {
+    return NextResponse.json(
+      {
+        error:
+          "One or more product handles are not available in the validated Shopify catalog. Search again before saving.",
+        code: "invalid_product_handle",
+        rejected_product_handles: [...new Set(rejectedProductHandles)],
+      },
+      { status: 422 },
+    );
   }
 
   if (!steps.length) {
@@ -179,26 +213,29 @@ export async function POST(request: NextRequest) {
 
   try {
     const neonStartedAt = performance.now();
-    await saveClaraRoutine(consultationId, summary, routine);
+    const saved = await saveClaraRoutine(consultationId, summary, routine);
     const neonMs = Math.round(performance.now() - neonStartedAt);
+    const persistedRoutine = saved.consultation.routine as ClaraRoutine;
     logger.info(
       "Clara routine tool completed",
       {
         tool_total_ms: Math.round(performance.now() - startedAt),
         shopify_ms: shopifyMs,
         neon_ms: neonMs,
-        result_count: routine.steps.length,
+        result_count: persistedRoutine.steps.length,
         requested_product_count: new Set(requestedHandles).size,
+        already_saved: !saved.created,
       },
       { route: "/api/agent-tools/save-routine" },
     );
     return NextResponse.json({
       saved: true,
-      routine,
-      rejected_product_handles: rejectedProductHandles,
-      instruction: rejectedProductHandles.length
-        ? "Some product handles were not valid Shopify products and were omitted. Do not mention or link them."
-        : "Routine saved with Shopify-validated product data.",
+      already_saved: !saved.created,
+      routine: persistedRoutine,
+      rejected_product_handles: [],
+      instruction: saved.created
+        ? "Routine saved with Shopify-validated product data. Confirm success once."
+        : "This consultation already has a saved routine. No changes were made; do not announce another save.",
     });
   } catch {
     return NextResponse.json(

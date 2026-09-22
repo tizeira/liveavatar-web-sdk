@@ -15,6 +15,7 @@ vi.mock("@/src/lib/db/prisma", () => ({
 import {
   completeClaraConsultation,
   getClaraConsultation,
+  saveClaraRoutine,
 } from "@/src/consultations/repository";
 
 describe("persisted routine owns completion summary", () => {
@@ -62,5 +63,78 @@ describe("persisted routine owns completion summary", () => {
     const data = mocks.update.mock.calls[0]![0].data;
     expect(data.summary).toBeUndefined();
     expect(data).not.toHaveProperty("routine");
+  });
+});
+
+describe("routine save idempotency", () => {
+  const originalRoutine = {
+    concerns: ["hidratación"],
+    cautions: [],
+    steps: [
+      {
+        moment: "morning" as const,
+        order: 1,
+        instruction: "Aplicar una hidratante.",
+        product: null,
+      },
+    ],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("claims an empty routine exactly once", async () => {
+    mocks.findUniqueOrThrow
+      .mockResolvedValueOnce({
+        status: "pending",
+        completedAt: null,
+        routineMetricRecordedAt: null,
+      })
+      .mockResolvedValueOnce({ routine: originalRoutine });
+    mocks.updateMany.mockResolvedValueOnce({ count: 1 });
+
+    const result = await saveClaraRoutine(
+      "consultation",
+      "Rutina acordada.",
+      originalRoutine,
+    );
+
+    expect(result.created).toBe(true);
+    expect(mocks.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          id: "consultation",
+          routine: { equals: expect.anything() },
+        }),
+      }),
+    );
+  });
+
+  it("returns the stored routine when the atomic claim was already taken", async () => {
+    mocks.findUniqueOrThrow
+      .mockResolvedValueOnce({
+        status: "routine_ready",
+        completedAt: null,
+        routineMetricRecordedAt: null,
+      })
+      .mockResolvedValueOnce({ routine: originalRoutine });
+    mocks.updateMany.mockResolvedValueOnce({ count: 0 });
+
+    const result = await saveClaraRoutine("consultation", "Intento repetido.", {
+      concerns: ["replacement"],
+      cautions: [],
+      steps: [
+        {
+          moment: "evening",
+          order: 1,
+          instruction: "No debe persistirse.",
+          product: null,
+        },
+      ],
+    });
+
+    expect(result.created).toBe(false);
+    expect(result.consultation.routine).toEqual(originalRoutine);
   });
 });

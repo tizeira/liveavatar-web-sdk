@@ -47,7 +47,12 @@ beforeEach(() => {
     products: [],
   });
   mockFetchProducts.mockResolvedValue(new Map());
-  mockSaveRoutine.mockResolvedValue({});
+  mockSaveRoutine.mockImplementation(
+    async (_consultationId: string, _summary: string, routine: unknown) => ({
+      consultation: { routine },
+      created: true,
+    }),
+  );
 });
 
 describe("Clara Shopify product tool", () => {
@@ -135,7 +140,7 @@ describe("Clara Shopify product tool", () => {
 describe("Clara routine tool", () => {
   const consultationId = "51bcaeed-9e1b-4c75-ad05-7b23fbd9d46f";
 
-  it("omits invented or unavailable Shopify product handles", async () => {
+  it("rejects invented or unavailable Shopify product handles", async () => {
     const response = await routineRoute.POST(
       request("/api/agent-tools/save-routine", {
         consultation_id: consultationId,
@@ -154,10 +159,72 @@ describe("Clara routine tool", () => {
     );
     const json = await response.json();
 
-    expect(response.status).toBe(200);
-    expect(json.routine.steps[0].product).toBeNull();
+    expect(response.status).toBe(422);
+    expect(json.code).toBe("invalid_product_handle");
     expect(json.rejected_product_handles).toEqual(["producto-inventado"]);
-    expect(mockSaveRoutine).toHaveBeenCalledOnce();
+    expect(mockSaveRoutine).not.toHaveBeenCalled();
+  });
+
+  it("rejects a named Beta product when the catalog handle is missing", async () => {
+    const response = await routineRoute.POST(
+      request("/api/agent-tools/save-routine", {
+        consultation_id: consultationId,
+        summary: "Rutina acordada.",
+        steps: [
+          {
+            moment: "morning",
+            order: 1,
+            instruction: "Aplicar Beta Hidra sobre la piel limpia",
+          },
+        ],
+      }),
+    );
+    const json = await response.json();
+
+    expect(response.status).toBe(422);
+    expect(json.code).toBe("product_handle_required");
+    expect(json.invalid_steps).toEqual([1]);
+    expect(mockSaveRoutine).not.toHaveBeenCalled();
+  });
+
+  it("returns the original routine without rewriting on a repeated save", async () => {
+    const originalRoutine = {
+      concerns: ["hidratación"],
+      cautions: [],
+      steps: [
+        {
+          moment: "morning",
+          order: 1,
+          instruction: "Aplicar una hidratante",
+          product: null,
+        },
+      ],
+    };
+    mockSaveRoutine.mockResolvedValue({
+      consultation: { routine: originalRoutine },
+      created: false,
+    });
+
+    const response = await routineRoute.POST(
+      request("/api/agent-tools/save-routine", {
+        consultation_id: consultationId,
+        summary: "Intento repetido.",
+        steps: [
+          {
+            moment: "evening",
+            order: 1,
+            instruction: "Este cambio no debe persistirse",
+          },
+        ],
+      }),
+    );
+    const json = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(json.saved).toBe(true);
+    expect(json.already_saved).toBe(true);
+    expect(json.routine).toEqual(originalRoutine);
+    expect(json.instruction).toContain("No changes were made");
   });
 
   it("replaces a handle with canonical Shopify product data", async () => {

@@ -4,22 +4,74 @@ import {
   API_URL,
   AVATAR_ID_MOBILE,
   AVATAR_ID_DESKTOP,
+  HEYGEN_ELEVENLABS_SECRET_ID,
+  ELEVENLABS_AGENT_ID,
+  CHROMA_KEY_ENABLED,
+  CHROMA_MIN_HUE,
+  CHROMA_MAX_HUE,
+  CHROMA_MIN_SATURATION,
+  CHROMA_EDGE_SHARPNESS,
+  CHROMA_BG_URL_DESKTOP,
+  CHROMA_BG_URL_MOBILE,
+  SHOPIFY_HMAC_SECRET,
 } from "../secrets";
 import { NextRequest } from "next/server";
 import { rateLimitByEndpoint } from "@/src/lib/rate-limit";
-import { createSession } from "@/src/lib/db/queries";
-import {
-  verifyCustomerToken,
-  isValidCustomerId,
-  cleanCustomerId,
-} from "@/src/shopify";
 import { logger } from "@/src/lib/logger/secure-logger";
+import { randomBytes, randomUUID } from "node:crypto";
+import { getRecentClaraConversationMemory } from "@/src/consultations/repository";
+import type { ClaraConversationMemory } from "@/src/consultations/types";
+import { hashConsultationAccessToken } from "@/src/consultations/security";
+import {
+  attachClaraLiveAvatarSession,
+  cancelClaraBuyerSession,
+  CLARA_ACTIVE_SESSION_TTL_SECONDS,
+  CLARA_BUYER_COOKIE_NAME,
+  deriveAuthenticatedTesterKey,
+  readClaraBuyerTicket,
+  reserveClaraBuyerSession,
+} from "@/src/lib/clara-buyer-access";
 
-export async function POST(request: Request) {
+function identifierSuffix(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value.slice(-6) : null;
+}
+
+const PROVIDER_TIMEOUT_MS = 20_000;
+
+class ProviderTimeoutError extends Error {
+  constructor() {
+    super("Provider request timed out");
+    this.name = "ProviderTimeoutError";
+  }
+}
+
+function createProviderDeadline() {
+  const controller = new AbortController();
+  let timeoutId: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new ProviderTimeoutError());
+      controller.abort();
+    }, PROVIDER_TIMEOUT_MS);
+  });
+
+  return {
+    signal: controller.signal,
+    race<T>(operation: Promise<T>) {
+      return Promise.race([operation, timeout]);
+    },
+    cleanup() {
+      clearTimeout(timeoutId);
+      controller.abort();
+    },
+  };
+}
+
+export async function POST(request: NextRequest) {
   // === RATE LIMIT CHECK ===
   // Cast to NextRequest for rate limiting (headers are compatible)
   const limitResult = await rateLimitByEndpoint(
-    request as NextRequest,
+    request,
     "start-custom-session",
   );
 
@@ -47,55 +99,42 @@ export async function POST(request: Request) {
 
   // === PARSE REQUEST BODY ===
   let deviceType: "mobile" | "desktop" = "desktop";
-  let shopifyCustomerId: string | undefined;
-  let shopifyToken: string | undefined;
 
   try {
     const body = await request.json();
     if (body.deviceType === "mobile") {
       deviceType = "mobile";
     }
-    // Optional Shopify credentials for iframe users
-    shopifyCustomerId = body.customer_id;
-    shopifyToken = body.shopify_token;
   } catch {
     // No body or invalid JSON, use default (desktop)
   }
 
   // === AUTH GUARD ===
-  // Allow either:
-  // 1. NextAuth session (Google/Credentials login)
-  // 2. Valid Shopify HMAC token (iframe users)
+  // Paid browser sessions use an opaque HttpOnly ticket issued only after a
+  // purchase-aware Shopify verification. NextAuth remains a QA tester path.
   const session = await auth();
-  let isShopifyUser = false;
-
-  // Validate Shopify credentials if provided
-  if (shopifyCustomerId && shopifyToken) {
-    const cleanId = cleanCustomerId(shopifyCustomerId);
-    if (
-      isValidCustomerId(cleanId) &&
-      verifyCustomerToken(shopifyToken, cleanId)
-    ) {
-      isShopifyUser = true;
-      logger.info(
-        "Valid Shopify HMAC",
-        { customerId: cleanId },
-        { route: "/api/start-custom-session" },
-      );
-    } else {
-      logger.warn(
-        "Invalid Shopify HMAC attempt",
-        { customerId: cleanId },
-        { route: "/api/start-custom-session" },
-      );
-    }
+  const testerUser =
+    process.env.VERCEL_ENV === "production" ? null : session?.user;
+  let buyerTicket = null;
+  try {
+    buyerTicket = await readClaraBuyerTicket(
+      request.cookies.get(CLARA_BUYER_COOKIE_NAME)?.value,
+    );
+  } catch {
+    return new Response(
+      JSON.stringify({
+        error: "Access service unavailable",
+        code: "CLARA_LIMITER_UNAVAILABLE",
+      }),
+      { status: 503, headers: { "Content-Type": "application/json" } },
+    );
   }
 
-  if (!session?.user && !isShopifyUser) {
+  if (!testerUser && !buyerTicket) {
     return new Response(
       JSON.stringify({
         error: "Unauthorized",
-        message: "Valid session or Shopify credentials required",
+        message: "Valid buyer access or tester session required",
       }),
       {
         status: 401,
@@ -106,6 +145,28 @@ export async function POST(request: Request) {
 
   let session_token = "";
   let session_id = "";
+  let conversationMemory: ClaraConversationMemory = [];
+  const consultationId = randomUUID();
+  const consultationAccessToken = randomBytes(32).toString("base64url");
+  let shopifyCustomerKey = buyerTicket?.buyerKey;
+  let rateLimitBuyerKey = shopifyCustomerKey;
+  if (!rateLimitBuyerKey && testerUser?.email && SHOPIFY_HMAC_SECRET) {
+    rateLimitBuyerKey = deriveAuthenticatedTesterKey(
+      testerUser.email,
+      SHOPIFY_HMAC_SECRET,
+    );
+    shopifyCustomerKey = rateLimitBuyerKey;
+  }
+
+  if (!rateLimitBuyerKey) {
+    return new Response(
+      JSON.stringify({
+        error: "Unauthorized",
+        message: "A buyer identity is required",
+      }),
+      { status: 401, headers: { "Content-Type": "application/json" } },
+    );
+  }
 
   // Select avatar based on device type
   const avatarId =
@@ -125,127 +186,230 @@ export async function POST(request: Request) {
     );
   }
 
+  if (!HEYGEN_ELEVENLABS_SECRET_ID) {
+    logger.error("[HEYGEN] HEYGEN_ELEVENLABS_SECRET_ID not configured", null, {
+      route: "/api/start-custom-session",
+    });
+    return new Response(
+      JSON.stringify({
+        error: "ElevenLabs plugin not configured",
+        code: "HEYGEN_ELEVENLABS_SECRET_MISSING",
+      }),
+      { status: 500, headers: { "Content-Type": "application/json" } },
+    );
+  }
+
+  const reservation = await reserveClaraBuyerSession({
+    buyerKey: rateLimitBuyerKey,
+    consultationId,
+    accessTokenHash: hashConsultationAccessToken(consultationAccessToken),
+  });
+  if (!reservation.ok) {
+    const status =
+      reservation.reason === "active_session"
+        ? 409
+        : reservation.reason === "start_limit"
+          ? 429
+          : 503;
+    const message =
+      reservation.reason === "active_session"
+        ? "Ya hay una conversación de Clara activa para este comprador."
+        : reservation.reason === "start_limit"
+          ? "Alcanzaste el máximo de tres conversaciones por hora."
+          : "El control de acceso está temporalmente fuera de servicio.";
+    return new Response(
+      JSON.stringify({
+        error: message,
+        code: `CLARA_${reservation.reason.toUpperCase()}`,
+        retryAfter: reservation.retryAfter,
+      }),
+      {
+        status,
+        headers: {
+          "Content-Type": "application/json",
+          "Retry-After": String(reservation.retryAfter),
+        },
+      },
+    );
+  }
+
+  const cancelReservation = () =>
+    cancelClaraBuyerSession(rateLimitBuyerKey, consultationId);
+
   logger.info(
-    "[HEYGEN] Starting CUSTOM session",
+    "[HEYGEN] Starting LITE+ElevenLabs Plugin session",
     {
-      avatarId,
+      avatarIdSuffix: identifierSuffix(avatarId),
       deviceType,
       apiUrl: API_URL,
       hasApiKey: !!API_KEY,
+      hasSecretId: !!HEYGEN_ELEVENLABS_SECRET_ID,
+      agentIdSuffix: identifierSuffix(ELEVENLABS_AGENT_ID),
     },
     { route: "/api/start-custom-session" },
   );
 
   try {
-    const heygenPayload = {
-      mode: "CUSTOM",
-      avatar_id: avatarId,
-    };
+    const providerDeadline = createProviderDeadline();
+    try {
+      const heygenPayload = {
+        mode: "LITE",
+        avatar_id: avatarId,
+        elevenlabs_agent_config: {
+          secret_id: HEYGEN_ELEVENLABS_SECRET_ID,
+          agent_id: ELEVENLABS_AGENT_ID,
+          dynamic_variables: {
+            // Correlates the provider's post-call webhook with this browser
+            // session. The separate recap access token is never sent upstream.
+            consultation_id: consultationId,
+          },
+        },
+      };
 
-    logger.debug("[HEYGEN] Request payload", heygenPayload, {
-      route: "/api/start-custom-session",
-    });
-
-    const res = await fetch(`${API_URL}/v1/sessions/token`, {
-      method: "POST",
-      headers: {
-        "X-API-KEY": API_KEY,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(heygenPayload),
-    });
-
-    if (!res.ok) {
-      let errorMessage = "Failed to retrieve session token";
-      let errorCode = "HEYGEN_UNKNOWN_ERROR";
-      let errorDetails: Record<string, unknown> = {};
-
-      try {
-        const errorData = await res.json();
-        errorDetails = errorData;
-
-        // Extract error message from various HeyGen response formats
-        if (errorData.data?.[0]?.message) {
-          errorMessage = errorData.data[0].message;
-        } else if (errorData.error) {
-          errorMessage =
-            typeof errorData.error === "string"
-              ? errorData.error
-              : JSON.stringify(errorData.error);
-        } else if (errorData.message) {
-          errorMessage = errorData.message;
-        }
-
-        // Detect specific error types for better diagnostics
-        const lowerMsg = errorMessage.toLowerCase();
-        if (lowerMsg.includes("subscription") || lowerMsg.includes("expired")) {
-          errorCode = "HEYGEN_SUBSCRIPTION_EXPIRED";
-        } else if (lowerMsg.includes("credit") || lowerMsg.includes("quota")) {
-          errorCode = "HEYGEN_QUOTA_EXCEEDED";
-        } else if (lowerMsg.includes("rate") || lowerMsg.includes("limit")) {
-          errorCode = "HEYGEN_RATE_LIMITED";
-        } else if (
-          lowerMsg.includes("avatar") ||
-          lowerMsg.includes("not found")
-        ) {
-          errorCode = "HEYGEN_AVATAR_NOT_FOUND";
-        } else if (
-          lowerMsg.includes("unauthorized") ||
-          lowerMsg.includes("invalid")
-        ) {
-          errorCode = "HEYGEN_UNAUTHORIZED";
-        } else if (res.status === 401 || res.status === 403) {
-          errorCode = "HEYGEN_AUTH_FAILED";
-        } else if (res.status === 402) {
-          errorCode = "HEYGEN_PAYMENT_REQUIRED";
-        }
-      } catch {
-        logger.warn("[HEYGEN] Could not parse error response body", null, {
-          route: "/api/start-custom-session",
-        });
-      }
-
-      logger.error(
-        `[HEYGEN] API Error: ${errorCode}`,
+      logger.debug(
+        "[HEYGEN] Request payload prepared",
         {
-          status: res.status,
-          statusText: res.statusText,
-          errorMessage,
-          errorCode,
-          avatarId,
-          errorDetails,
+          mode: heygenPayload.mode,
+          avatarIdSuffix: identifierSuffix(avatarId),
+          agentIdSuffix: identifierSuffix(ELEVENLABS_AGENT_ID),
+          dynamicVariableNames: ["consultation_id"],
         },
         { route: "/api/start-custom-session" },
       );
 
+      const res = await providerDeadline.race(
+        fetch(`${API_URL}/v1/sessions/token`, {
+          method: "POST",
+          headers: {
+            "X-API-KEY": API_KEY,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(heygenPayload),
+          signal: providerDeadline.signal,
+        }),
+      );
+
+      if (!res.ok) {
+        let errorMessage = "Failed to retrieve session token";
+        let errorCode = "HEYGEN_UNKNOWN_ERROR";
+        let errorDetails: Record<string, unknown> = {};
+
+        try {
+          const errorData = await providerDeadline.race(res.json());
+          errorDetails = errorData;
+
+          // Extract error message from various HeyGen response formats
+          if (errorData.data?.[0]?.message) {
+            errorMessage = errorData.data[0].message;
+          } else if (errorData.error) {
+            errorMessage =
+              typeof errorData.error === "string"
+                ? errorData.error
+                : JSON.stringify(errorData.error);
+          } else if (errorData.message) {
+            errorMessage = errorData.message;
+          }
+
+          // Detect specific error types for better diagnostics
+          const lowerMsg = errorMessage.toLowerCase();
+          if (
+            lowerMsg.includes("subscription") ||
+            lowerMsg.includes("expired")
+          ) {
+            errorCode = "HEYGEN_SUBSCRIPTION_EXPIRED";
+          } else if (
+            lowerMsg.includes("credit") ||
+            lowerMsg.includes("quota")
+          ) {
+            errorCode = "HEYGEN_QUOTA_EXCEEDED";
+          } else if (lowerMsg.includes("rate") || lowerMsg.includes("limit")) {
+            errorCode = "HEYGEN_RATE_LIMITED";
+          } else if (
+            lowerMsg.includes("avatar") ||
+            lowerMsg.includes("not found")
+          ) {
+            errorCode = "HEYGEN_AVATAR_NOT_FOUND";
+          } else if (
+            lowerMsg.includes("unauthorized") ||
+            lowerMsg.includes("invalid")
+          ) {
+            errorCode = "HEYGEN_UNAUTHORIZED";
+          } else if (res.status === 401 || res.status === 403) {
+            errorCode = "HEYGEN_AUTH_FAILED";
+          } else if (res.status === 402) {
+            errorCode = "HEYGEN_PAYMENT_REQUIRED";
+          }
+        } catch (error) {
+          if (error instanceof ProviderTimeoutError) throw error;
+          logger.warn("[HEYGEN] Could not parse error response body", null, {
+            route: "/api/start-custom-session",
+          });
+        }
+
+        logger.error(
+          `[HEYGEN] API Error: ${errorCode}`,
+          {
+            status: res.status,
+            statusText: res.statusText,
+            errorCode,
+            avatarIdSuffix: identifierSuffix(avatarId),
+            errorDetailKeys: Object.keys(errorDetails),
+          },
+          { route: "/api/start-custom-session" },
+        );
+
+        await cancelReservation();
+        return new Response(
+          JSON.stringify({
+            error: errorMessage,
+            code: errorCode,
+            service: "heygen",
+          }),
+          {
+            status: res.status,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+
+      const data = await providerDeadline.race(res.json());
+      logger.info(
+        "[HEYGEN] Session created successfully",
+        {
+          sessionIdSuffix: identifierSuffix(data.data?.session_id),
+          hasToken: !!data.data?.session_token,
+        },
+        {
+          route: "/api/start-custom-session",
+        },
+      );
+
+      session_token = data.data.session_token;
+      session_id = data.data.session_id;
+    } finally {
+      providerDeadline.cleanup();
+    }
+  } catch (error: unknown) {
+    if (error instanceof ProviderTimeoutError) {
+      logger.warn("[HEYGEN] Provider session creation timed out", null, {
+        route: "/api/start-custom-session",
+      });
       return new Response(
         JSON.stringify({
-          error: errorMessage,
-          code: errorCode,
+          error: "La creación de la sesión demoró demasiado.",
+          code: "HEYGEN_TIMEOUT",
           service: "heygen",
+          retryAfter: CLARA_ACTIVE_SESSION_TTL_SECONDS,
         }),
         {
-          status: res.status,
-          headers: { "Content-Type": "application/json" },
+          status: 504,
+          headers: {
+            "Content-Type": "application/json",
+            "Retry-After": String(CLARA_ACTIVE_SESSION_TTL_SECONDS),
+          },
         },
       );
     }
-
-    const data = await res.json();
-    logger.info(
-      "[HEYGEN] Session created successfully",
-      {
-        sessionId: data.data?.session_id,
-        hasToken: !!data.data?.session_token,
-      },
-      {
-        route: "/api/start-custom-session",
-      },
-    );
-
-    session_token = data.data.session_token;
-    session_id = data.data.session_id;
-  } catch (error: unknown) {
     const err = error as Error;
     const isNetworkError =
       err.message.includes("fetch") ||
@@ -270,10 +434,14 @@ export async function POST(request: Request) {
           ? "HEYGEN_NETWORK_ERROR"
           : "HEYGEN_UNEXPECTED_ERROR",
         service: "heygen",
+        retryAfter: CLARA_ACTIVE_SESSION_TTL_SECONDS,
       }),
       {
         status: 500,
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "Retry-After": String(CLARA_ACTIVE_SESSION_TTL_SECONDS),
+        },
       },
     );
   }
@@ -287,26 +455,43 @@ export async function POST(request: Request) {
         error: "Failed to retrieve session token",
         code: "HEYGEN_EMPTY_TOKEN",
         service: "heygen",
+        retryAfter: CLARA_ACTIVE_SESSION_TTL_SECONDS,
       }),
       {
         status: 500,
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "Retry-After": String(CLARA_ACTIVE_SESSION_TTL_SECONDS),
+        },
       },
     );
   }
 
-  // === DATABASE TRACKING ===
-  // Track session in database for analytics (non-blocking)
+  if (shopifyCustomerKey) {
+    try {
+      conversationMemory = await getRecentClaraConversationMemory(
+        shopifyCustomerKey,
+        3,
+      );
+    } catch (memoryError) {
+      logger.warn(
+        "[DB] Previous consultation memory unavailable (non-critical)",
+        { name: (memoryError as Error).name },
+        { route: "/api/start-custom-session" },
+      );
+    }
+  }
+
+  // === PRIVACY-MINIMIZED CONSULTATION STORAGE ===
+  // The buyer reservation already created the durable consultation atomically.
+  // Attaching the provider session is useful for operations, but correlation
+  // still works through consultation_id if this secondary update fails.
+  let consultationPersistenceAvailable = true;
   try {
-    await createSession({
-      sessionToken: session_token,
-      deviceType,
-      userId: session?.user?.id,
-      shopifyEmail: session?.user?.email || undefined,
-    });
+    await attachClaraLiveAvatarSession(consultationId, session_id);
     logger.debug(
       "[DB] Session tracked",
-      { sessionId: session_id },
+      { sessionIdSuffix: identifierSuffix(session_id) },
       {
         route: "/api/start-custom-session",
       },
@@ -314,6 +499,7 @@ export async function POST(request: Request) {
   } catch (dbError) {
     // Don't fail the request if DB tracking fails - just log it
     const err = dbError as Error;
+    consultationPersistenceAvailable = false;
     logger.warn(
       "[DB] Failed to track session (non-critical)",
       {
@@ -327,10 +513,34 @@ export async function POST(request: Request) {
     );
   }
 
-  return new Response(JSON.stringify({ session_token, session_id }), {
-    status: 200,
-    headers: {
-      "Content-Type": "application/json",
+  return new Response(
+    JSON.stringify({
+      session_token,
+      session_id,
+      consultation_id: consultationId,
+      consultation_access_token: consultationAccessToken,
+      consultation_persistence_available: consultationPersistenceAvailable,
+      conversation_memory: conversationMemory,
+      chroma_key_enabled: CHROMA_KEY_ENABLED,
+      ...(CHROMA_KEY_ENABLED && {
+        chroma_config: {
+          minHue: CHROMA_MIN_HUE,
+          maxHue: CHROMA_MAX_HUE,
+          minSaturation: CHROMA_MIN_SATURATION,
+          edgeSharpness: CHROMA_EDGE_SHARPNESS,
+          bgUrlDesktop: CHROMA_BG_URL_DESKTOP || null,
+          bgUrlMobile: CHROMA_BG_URL_MOBILE || null,
+        },
+      }),
+    }),
+    {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+        "X-RateLimit-Limit": "3",
+        "X-RateLimit-Remaining": String(reservation.remaining),
+        "X-RateLimit-Reset": new Date(reservation.resetAt).toISOString(),
+      },
     },
-  });
+  );
 }

@@ -107,7 +107,6 @@ function sanitizeObject(obj: unknown): unknown {
     return {
       name: obj.name,
       message: sanitizeString(obj.message),
-      // eslint-disable-next-line turbo/no-undeclared-env-vars
       stack: process.env.NODE_ENV === "development" ? obj.stack : undefined,
     };
   }
@@ -161,7 +160,6 @@ export function sanitize(data: unknown): unknown {
  * Check if we should log at this level
  */
 function shouldLog(level: LogLevel): boolean {
-  // eslint-disable-next-line turbo/no-undeclared-env-vars
   const isProduction = process.env.NODE_ENV === "production";
 
   // In production, only log warn and error

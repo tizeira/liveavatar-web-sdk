@@ -1,3 +1,5 @@
+import type { ClaraConversationMemory } from "@/src/consultations/types";
+
 export enum MessageSender {
   USER = "user",
   AVATAR = "avatar",
@@ -25,6 +27,10 @@ export interface CustomerData {
     date: string;
     items: Array<{ title: string; quantity: number }>;
   }>;
+  // Last purchase (from Liquid redirect, drives "recién compró" greeting)
+  lastOrderProduct?: string;
+  lastOrderDate?: string; // ISO 8601 from customer.last_order.created_at
+  conversationMemory?: ClaraConversationMemory;
 }
 
 /**

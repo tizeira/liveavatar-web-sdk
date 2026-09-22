@@ -26,8 +26,9 @@ coverage
 out/
 build
 dist
-lib
-docs
+# Only ignore the SDK build output, not source dirs named "lib"/"docs"
+packages/js-sdk/lib/
+packages/js-sdk/docs/
 
 
 # Debug

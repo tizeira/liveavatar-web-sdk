@@ -107,6 +107,18 @@ export const CUSTOMER_BY_ID_QUERY = `
 `;
 
 /**
+ * Minimal legacy-link entitlement check. It deliberately avoids customer PII
+ * and order contents; only purchase count is required at this boundary.
+ */
+export const CUSTOMER_PURCHASE_COUNT_BY_ID_QUERY = `
+  query customerPurchaseCountById($id: ID!) {
+    customer(id: $id) {
+      numberOfOrders
+    }
+  }
+`;
+
+/**
  * Simple query to check if customer exists and has orders
  * Lighter query for quick verification
  */
@@ -117,6 +129,230 @@ export const CUSTOMER_EXISTS_QUERY = `
         node {
           id
           numberOfOrders
+        }
+      }
+    }
+  }
+`;
+
+export const PRODUCTS_FOR_CLARA_QUERY = `
+  query productsForClara($first: Int!, $after: String) {
+    shop {
+      currencyCode
+      primaryDomain { url }
+    }
+    products(first: $first, after: $after, query: "status:active", sortKey: TITLE) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      nodes {
+        id
+        title
+        handle
+        updatedAt
+        description
+        productType
+        tags
+        status
+        onlineStoreUrl
+        resourcePublicationsV2(first: 20) {
+          nodes {
+            isPublished
+            publication { name }
+          }
+        }
+        featuredMedia {
+          preview {
+            image {
+              url
+              altText
+            }
+          }
+        }
+        variants(first: 20) {
+          nodes {
+            availableForSale
+            price
+            compareAtPrice
+          }
+        }
+        companionCondition: metafield(namespace: "custom", key: "clara_companion_condition") {
+          value
+        }
+        companionProducts: metafield(namespace: "custom", key: "clara_companion_products") {
+          references(first: 5) {
+            nodes {
+              ... on Product {
+                id
+                title
+                handle
+                description
+                productType
+                tags
+                status
+                onlineStoreUrl
+                resourcePublicationsV2(first: 20) {
+                  nodes {
+                    isPublished
+                    publication { name }
+                  }
+                }
+                featuredMedia {
+                  preview {
+                    image {
+                      url
+                      altText
+                    }
+                  }
+                }
+                variants(first: 20) {
+                  nodes {
+                    availableForSale
+                    price
+                    compareAtPrice
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+export const PRODUCT_FOR_CLARA_BY_HANDLE_QUERY = `
+  query productForClaraByHandle($handle: String!) {
+    shop {
+      currencyCode
+      primaryDomain { url }
+    }
+    productByHandle(handle: $handle) {
+      id
+      title
+      handle
+      description
+      status
+      onlineStoreUrl
+      resourcePublicationsV2(first: 20) {
+        nodes {
+          isPublished
+          publication { name }
+        }
+      }
+      featuredMedia {
+        preview {
+          image {
+            url
+            altText
+          }
+        }
+      }
+      variants(first: 20) {
+        nodes {
+          availableForSale
+          price
+          compareAtPrice
+        }
+      }
+      companionCondition: metafield(namespace: "custom", key: "clara_companion_condition") {
+        value
+      }
+      companionProducts: metafield(namespace: "custom", key: "clara_companion_products") {
+        references(first: 5) {
+          nodes {
+            ... on Product {
+              id
+              title
+              handle
+              description
+              productType
+              tags
+              status
+              onlineStoreUrl
+              resourcePublicationsV2(first: 20) {
+                nodes {
+                  isPublished
+                  publication { name }
+                }
+              }
+              featuredMedia {
+                preview {
+                  image {
+                    url
+                    altText
+                  }
+                }
+              }
+              variants(first: 20) {
+                nodes {
+                  availableForSale
+                  price
+                  compareAtPrice
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+export const PRODUCTS_FOR_CLARA_BY_HANDLES_QUERY = `
+  query productsForClaraByHandles($first: Int!, $query: String!) {
+    shop {
+      currencyCode
+      primaryDomain { url }
+    }
+    products(first: $first, query: $query) {
+      nodes {
+        id
+        title
+        handle
+        description
+        productType
+        tags
+        status
+        onlineStoreUrl
+        resourcePublicationsV2(first: 20) {
+          nodes {
+            isPublished
+            publication { name }
+          }
+        }
+        featuredMedia {
+          preview { image { url altText } }
+        }
+        variants(first: 20) {
+          nodes { availableForSale price compareAtPrice }
+        }
+        companionCondition: metafield(namespace: "custom", key: "clara_companion_condition") {
+          value
+        }
+        companionProducts: metafield(namespace: "custom", key: "clara_companion_products") {
+          references(first: 5) {
+            nodes {
+              ... on Product {
+                id
+                title
+                handle
+                description
+                productType
+                tags
+                status
+                onlineStoreUrl
+                resourcePublicationsV2(first: 20) {
+                  nodes { isPublished publication { name } }
+                }
+                featuredMedia { preview { image { url altText } } }
+                variants(first: 20) {
+                  nodes { availableForSale price compareAtPrice }
+                }
+              }
+            }
+          }
         }
       }
     }

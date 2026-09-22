@@ -1,0 +1,232 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+process.env.SHOPIFY_HMAC_SECRET = "shopify-test-secret";
+
+const tx = {
+  $executeRaw: vi.fn(),
+  claraConsultation: {
+    findFirst: vi.fn(),
+    count: vi.fn(),
+    create: vi.fn(),
+  },
+};
+const mockTransaction = vi.fn();
+const mockUpdate = vi.fn();
+const mockUpdateMany = vi.fn();
+const mockDeleteMany = vi.fn();
+const mockFindFirst = vi.fn();
+
+vi.mock("@/src/lib/db/prisma", () => ({
+  prisma: {
+    $transaction: mockTransaction,
+    claraConsultation: {
+      update: (...args: unknown[]) => mockUpdate(...args),
+      updateMany: (...args: unknown[]) => mockUpdateMany(...args),
+      deleteMany: (...args: unknown[]) => mockDeleteMany(...args),
+      findFirst: (...args: unknown[]) => mockFindFirst(...args),
+    },
+  },
+}));
+
+const access = await import("@/src/lib/clara-buyer-access");
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockTransaction.mockImplementation(
+    async (callback: (client: typeof tx) => unknown) => callback(tx),
+  );
+  tx.$executeRaw.mockResolvedValue(1);
+  tx.claraConsultation.findFirst.mockResolvedValue(null);
+  tx.claraConsultation.count.mockResolvedValue(0);
+  tx.claraConsultation.create.mockResolvedValue({});
+});
+
+function ticket(issuedAt = Math.floor(Date.now() / 1000)) {
+  return {
+    buyerKey: "d".repeat(64),
+    firstName: "Ana",
+    ordersCount: 1,
+    lastOrderProduct: null,
+    lastOrderDate: null,
+    issuedAt,
+  };
+}
+
+describe("Clara buyer access", () => {
+  it("encrypts and authenticates a short-lived browser ticket", async () => {
+    const now = 1_789_742_918;
+    const expected = ticket(now);
+    const token = await access.issueClaraBuyerTicket(
+      expected,
+      "shopify-test-secret",
+    );
+    expect(token).toMatch(
+      /^v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/,
+    );
+    expect(token).not.toContain("Ana");
+    await expect(
+      access.readClaraBuyerTicket(token, "shopify-test-secret", now),
+    ).resolves.toEqual(expected);
+  });
+
+  it("rejects modified and expired tickets", async () => {
+    const now = 1_789_742_918;
+    const freshToken = await access.issueClaraBuyerTicket(
+      ticket(now),
+      "shopify-test-secret",
+    );
+    await expect(
+      access.readClaraBuyerTicket(freshToken, "shopify-test-secret", now),
+    ).resolves.toEqual(ticket(now));
+    // Mutate authenticated bytes, not unused base64 padding bits.
+    const parts = freshToken.split(".");
+    const tag = Buffer.from(parts[3]!, "base64url");
+    tag[0] = tag[0]! ^ 1;
+    parts[3] = tag.toString("base64url");
+    const modified = parts.join(".");
+    await expect(
+      access.readClaraBuyerTicket(modified, "shopify-test-secret", now),
+    ).resolves.toBeNull();
+
+    const expired = await access.issueClaraBuyerTicket(
+      ticket(now - access.CLARA_BUYER_TICKET_TTL_SECONDS),
+      "shopify-test-secret",
+    );
+    await expect(
+      access.readClaraBuyerTicket(expired, "shopify-test-secret", now),
+    ).resolves.toBeNull();
+  });
+
+  it("atomically reserves a consultation and reports remaining starts", async () => {
+    const now = new Date("2026-09-15T12:00:00.000Z");
+    const result = await access.reserveClaraBuyerSession({
+      buyerKey: "a".repeat(64),
+      consultationId: "51bcaeed-9e1b-4c75-ad05-7b23fbd9d46f",
+      accessTokenHash: "b".repeat(64),
+      now,
+    });
+    expect(result).toEqual({
+      ok: true,
+      remaining: 2,
+      resetAt: now.getTime() + 3_600_000,
+    });
+    expect(tx.$executeRaw).toHaveBeenCalledOnce();
+    expect(tx.claraConsultation.create).toHaveBeenCalledOnce();
+  });
+
+  it("distinguishes an active conversation from the hourly quota", async () => {
+    const now = new Date("2026-09-15T12:00:00.000Z");
+    tx.claraConsultation.findFirst.mockResolvedValueOnce({
+      createdAt: new Date(now.getTime() - 220_000),
+    });
+    await expect(
+      access.reserveClaraBuyerSession({
+        buyerKey: "b".repeat(64),
+        consultationId: "consultation-a",
+        accessTokenHash: "c".repeat(64),
+        now,
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      reason: "active_session",
+      retryAfter: 500,
+    });
+
+    tx.claraConsultation.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ createdAt: new Date(now.getTime() - 600_000) });
+    tx.claraConsultation.count.mockResolvedValueOnce(3);
+    await expect(
+      access.reserveClaraBuyerSession({
+        buyerKey: "b".repeat(64),
+        consultationId: "consultation-b",
+        accessTokenHash: "c".repeat(64),
+        now,
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      reason: "start_limit",
+      retryAfter: 3000,
+    });
+  });
+
+  it("fails closed when Neon is unavailable", async () => {
+    mockTransaction.mockRejectedValueOnce(new Error("offline"));
+    await expect(
+      access.reserveClaraBuyerSession({
+        buyerKey: "c".repeat(64),
+        consultationId: "consultation-c",
+        accessTokenHash: "d".repeat(64),
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      reason: "unavailable",
+      retryAfter: 30,
+    });
+  });
+
+  it("only cancels the buyer's empty pending reservation, never a saved routine", async () => {
+    mockDeleteMany.mockResolvedValueOnce({ count: 1 });
+    await expect(
+      access.cancelClaraBuyerSession("test-buyer", "test-consultation"),
+    ).resolves.toBe(true);
+    const where = mockDeleteMany.mock.calls[0]![0].where;
+    expect(where).toMatchObject({
+      id: "test-consultation",
+      shopifyCustomerKey: "test-buyer",
+      status: "pending",
+      elevenLabsConversationId: null,
+    });
+    expect(where.routine).toHaveProperty("equals");
+  });
+
+  it("reports failed cleanup without claiming the reservation was removed", async () => {
+    mockDeleteMany.mockRejectedValueOnce(new Error("offline"));
+    await expect(
+      access.cancelClaraBuyerSession("test-buyer", "test-consultation"),
+    ).resolves.toBe(false);
+  });
+
+  it("releases an active consultation into post-call processing", async () => {
+    mockUpdateMany.mockResolvedValueOnce({ count: 1 });
+    await expect(
+      access.releaseClaraBuyerSession("test-buyer", "test-consultation"),
+    ).resolves.toBe(true);
+    expect(mockUpdateMany).toHaveBeenCalledWith({
+      where: {
+        id: "test-consultation",
+        shopifyCustomerKey: "test-buyer",
+        status: { in: ["pending", "routine_ready"] },
+      },
+      data: { status: "processing" },
+    });
+  });
+
+  it("treats an already released or terminal consultation as idempotent", async () => {
+    mockUpdateMany.mockResolvedValueOnce({ count: 0 });
+    mockFindFirst.mockResolvedValueOnce({ id: "test-consultation" });
+    await expect(
+      access.releaseClaraBuyerSession("test-buyer", "test-consultation"),
+    ).resolves.toBe(true);
+    expect(mockFindFirst).toHaveBeenCalledWith({
+      where: {
+        id: "test-consultation",
+        shopifyCustomerKey: "test-buyer",
+        status: { in: ["processing", "completed", "failed"] },
+      },
+      select: { id: true },
+    });
+  });
+
+  it("does not confirm release after a database failure or absent consultation", async () => {
+    mockUpdateMany.mockRejectedValueOnce(new Error("offline"));
+    await expect(
+      access.releaseClaraBuyerSession("test-buyer", "test-consultation"),
+    ).resolves.toBe(false);
+    mockUpdateMany.mockResolvedValueOnce({ count: 0 });
+    mockFindFirst.mockResolvedValueOnce(null);
+    await expect(
+      access.releaseClaraBuyerSession("test-buyer", "test-consultation"),
+    ).resolves.toBe(false);
+  });
+});

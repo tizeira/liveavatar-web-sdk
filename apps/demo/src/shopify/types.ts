@@ -56,6 +56,35 @@ export interface ShopifyCustomerByIdResponse {
   customer: ShopifyCustomerNode | null;
 }
 
+export interface ClaraCatalogPrice {
+  amount: string;
+  currencyCode: string;
+}
+
+export interface ClaraCatalogProductSummary {
+  id: string;
+  title: string;
+  handle: string;
+  url: string | null;
+  imageUrl: string | null;
+  imageAlt: string | null;
+  availableForSale: boolean;
+  price: ClaraCatalogPrice | null;
+  compareAtPrice: ClaraCatalogPrice | null;
+}
+
+export interface ClaraCatalogProduct extends ClaraCatalogProductSummary {
+  description: string;
+  companionCondition: "if_no_moisturizer" | null;
+  companionProducts: ClaraCatalogProductSummary[];
+}
+
+export interface ClaraCatalogSnapshotEntry {
+  product: ClaraCatalogProduct;
+  searchText: string;
+  shopifyUpdatedAt: string;
+}
+
 // ============================================================================
 // Processed Customer Data Types
 // ============================================================================
@@ -91,6 +120,8 @@ export interface ShopifyCustomerRequest {
   last_name?: string;
   email?: string;
   orders_count?: string;
+  last_order_product?: string;
+  last_order_date?: string;
 }
 
 export interface VerifyCustomerRequest {
@@ -109,6 +140,8 @@ export interface ShopifyCustomerResponse {
     skinType?: string;
     skinConcerns?: string[];
     recentOrders?: ShopifyOrder[];
+    lastOrderProduct?: string;
+    lastOrderDate?: string;
   } | null;
   error?: string;
 }

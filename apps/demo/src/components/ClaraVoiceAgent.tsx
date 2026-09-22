@@ -1,10 +1,17 @@
 "use client";
 
-import React, { useEffect, useRef, useCallback, useState } from "react";
+import React, {
+  useEffect,
+  useRef,
+  useCallback,
+  useState,
+  useMemo,
+} from "react";
 import {
   SessionState,
   ConnectionQuality,
   AgentEventsEnum,
+  VoiceChatState,
 } from "@heygen/liveavatar-web-sdk";
 import {
   LiveAvatarContextProvider,
@@ -13,41 +20,60 @@ import {
   WidgetState,
   CustomerData,
 } from "../liveavatar";
-import {
-  useScreenSize,
-  useFixedHeight,
-  useElevenLabsAgent,
-  VadInfo,
-} from "../hooks";
+import { useScreenSize, useFixedHeight } from "../hooks";
+import { sendCustomerContextAndWait } from "../utils/heygen/elevenlabs-commands";
+import { waitForMediaPlaybackReady } from "../utils/media-playback-readiness";
+import { useChromaKey } from "../hooks/useChromaKey";
+import type { ChromaKeyConfig } from "../hooks/useChromaKey";
+import type {
+  ClaraRoutine,
+  ClaraConsultationResult,
+  ClaraConversationMemory,
+} from "../consultations/types";
+import type { ClaraCatalogProduct } from "../shopify/types";
+import { routineGoalsText } from "../consultations/routine";
+import { releaseConsultation } from "../consultations/release";
+import styles from "./ClaraVoiceAgent.module.css";
+import { SavedRoutinePanel } from "./SavedRoutinePanel";
+
+// Debug (solo preview/develop)
+import { MobileLogger } from "./debug/MobileLogger";
 
 // shadcn/ui components
 import { Button } from "./ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "./ui/card";
-import { Badge } from "./ui/badge";
-import { Skeleton } from "./ui/skeleton";
-import Image from "next/image";
-
 // Lucide icons
-import { Phone, PhoneOff, Mic, MicOff, Loader2, Clock } from "lucide-react";
+import {
+  PhoneOff,
+  Mic,
+  MicOff,
+  Clock,
+  MessageSquare,
+  Bug,
+  ChevronLeft,
+} from "lucide-react";
 
 // Toast notifications
 import { toast } from "sonner";
 
 // ============================================
-// DEVICE DETECTION (runtime, not module-level)
+// DEBUG UI TOGGLE
 // ============================================
-const isMobileDevice = (): boolean => {
-  if (typeof window === "undefined") return false;
-  return /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(
-    navigator.userAgent,
-  );
-};
+// Set to true to show debug UI (Test Agent button, Mic Status button, MobileLogger).
+// Keep false in production. Diagnostic event logging in console stays regardless.
+const DEBUG_UI = false;
+
+type SafeClientTelemetryEvent =
+  | "voicechat_state_observed"
+  | "voicechat_ready"
+  | "voicechat_prepare_failed"
+  | "greeting_triggered"
+  | "greeting_trigger_failed"
+  | "greeting_completed"
+  | "microphone_ready"
+  | "microphone_unmute_failed"
+  | "media_ready"
+  | "media_ready_timeout"
+  | "connection_quality_bad";
 
 // ============================================
 // SESSION LIMIT CONFIGURATION
@@ -59,114 +85,31 @@ const SESSION_LIMIT_MINUTES = 10;
 // Warning before session ends (in seconds)
 const SESSION_WARNING_SECONDS = 30;
 
-// ============================================
-// SMART INTERRUPTION CONFIGURATION
-// ============================================
-// Filter out noise and brief sounds from triggering interruptions
-// NOTE: onInterruption now trusts ElevenLabs detection directly (no filtering)
-// These constants are only used in onUserTranscript for late transcript detection
+const BrandMark: React.FC<{ dark?: boolean; className?: string }> = ({
+  dark = false,
+  className = "",
+}) => (
+  <div
+    className={`${styles.brand} ${styles.display} ${dark ? styles.brandOnDark : ""} ${className}`}
+    aria-label="Beta Skintech"
+  >
+    <span className={styles.brandBeta}>BETA</span>
+    <span className={styles.brandSkintech}>SKINTECH</span>
+  </div>
+);
 
-// Minimum VAD score to consider valid speech (0-1 range from ElevenLabs)
-const MIN_VAD_SCORE_FOR_INTERRUPT = 0.5;
-
-// Enable/disable smart interruption filtering in onUserTranscript (set false for original behavior)
-const SMART_INTERRUPTION_ENABLED = true;
-
-// ============================================
-// INTERRUPT RACE CONDITION PROTECTION
-// ============================================
-// Time window after interrupt where we block sending audio to HeyGen
-// Prevents race condition where sendAllAudioToAvatar() continues after interrupt
-const INTERRUPT_BLOCK_WINDOW_MS = 500;
-
-// ============================================
-// AUDIO FADE-OUT CONFIGURATION
-// ============================================
-// Smooth fade-out when user interrupts (instead of abrupt cut)
-const AUDIO_FADE_ENABLED = true;
-const AUDIO_FADE_DURATION_MS = 250; // 200-300ms recommended
-
-// ============================================
-// HYBRID AUDIO STRATEGY CONSTANTS
-// ============================================
-// These are DESKTOP defaults - mobile overrides happen at runtime in component
-
-// Smart Chunking: Split large audio to avoid HeyGen 1MB limit
-const MAX_AUDIO_SIZE_BYTES = 800 * 1024; // 800KB per chunk (~16s audio)
-const CHUNK_WAIT_TIMEOUT_MS = 20000; // 20s timeout per chunk
-
-// Ghost chunk protection: Ignore chunks arriving shortly after interrupt
-const INTERRUPT_DEBOUNCE_MS = 300; // Ignore chunks for 300ms after interrupt
-
-// Late transcript protection: Ignore user transcripts arriving shortly after audio sent
-// On mobile, transcripts can arrive 3-50ms after audio was already sent to HeyGen
-// Users cannot realistically interrupt within 100ms of receiving audio
-const AUDIO_SENT_GRACE_PERIOD_MS = 100;
-
-// Target sample rate for HeyGen
-const TARGET_SAMPLE_RATE = 24000;
-
-// ============================================
-// DESKTOP vs MOBILE AUDIO CONFIG
-// ============================================
-// Desktop: Can handle larger buffers, longer gaps, works well with immediate send
-// Mobile: Needs smaller buffers, shorter gaps, and careful timing
-interface AudioConfig {
-  gapThreshold: number; // ms gap to detect end of stream
-  maxBufferSamples: number; // Max samples before forced processing
-  phase1LeadingSilence: number; // Silence before first audio
-  phase1TrailingSilence: number;
-  phase2LeadingSilence: number; // Silence before subsequent audio
-  phase2TrailingSilence: number;
-  immediateFirstChunk: boolean; // Send first chunk without delay?
-}
-
-const DESKTOP_CONFIG: AudioConfig = {
-  gapThreshold: 250,
-  maxBufferSamples: 64000, // 4s @ 16kHz
-  phase1LeadingSilence: 30, // Minimal - HeyGen handles it well
-  phase1TrailingSilence: 0,
-  phase2LeadingSilence: 50,
-  phase2TrailingSilence: 150,
-  immediateFirstChunk: true, // Works great on desktop
-};
-
-const MOBILE_CONFIG: AudioConfig = {
-  gapThreshold: 150, // More sensitive for burst delivery
-  maxBufferSamples: 48000, // 3s @ 16kHz - prevents premature buffer limit
-  phase1LeadingSilence: 100, // More time for HeyGen to wake up on mobile
-  phase1TrailingSilence: 0,
-  phase2LeadingSilence: 80,
-  phase2TrailingSilence: 150,
-  immediateFirstChunk: true, // Still send immediately, but with more silence
-};
-
-// GREETING FIX: Skip immediate send for greeting to accumulate more audio
-// This prevents fragmentation of the greeting message on mobile devices
-const GREETING_SKIP_PHASE1 = true;
-
-/**
- * Get minimum samples required for PHASE 1 immediate send.
- *
- * CRITICAL CONSTRAINT: Must be LESS than maxBufferSamples to avoid
- * truncation from BUFFER LIMIT override.
- *
- * Desktop: 48000 samples (3.0s @ 16kHz)
- *   - maxBufferSamples: 64000 (4.0s)
- *   - Safety margin: 16000 samples (1.0s)
- *   - Rationale: Works perfectly, no changes needed
- *
- * Mobile: 36000 samples (2.25s @ 16kHz)
- *   - maxBufferSamples: 48000 (3.0s)
- *   - Safety margin: 12000 samples (0.75s)
- *   - Rationale: Ensures complete thoughts, prevents BUFFER LIMIT override
- *
- * @param isMobile - Whether device is mobile (phone/tablet)
- * @returns Minimum samples threshold for PHASE 1
- */
-const getMinPhase1Samples = (isMobile: boolean): number => {
-  return isMobile ? 36000 : 48000; // Mobile: 2.25s, Desktop: 3s
-};
+const ClaraPortrait: React.FC<{ compact?: boolean }> = ({
+  compact = false,
+}) => (
+  // eslint-disable-next-line @next/next/no-img-element
+  <img
+    src="/clara-avatar.png"
+    alt=""
+    width={compact ? 138 : 102}
+    height={compact ? 138 : 102}
+    className={styles.claraVoiceIcon}
+  />
+);
 
 // ============================================
 // SESSION EXPIRY WARNING BANNER
@@ -208,68 +151,48 @@ const StatusIndicator: React.FC<StatusIndicatorProps> = ({
   isMuted,
   connectionQuality,
 }) => {
-  const getStatusContent = () => {
-    if (!isConnected) {
-      return null;
-    }
+  if (!isConnected) return null;
 
-    if (isMuted) {
-      return (
-        <Badge className="status-badge glass-morphism-strong bg-red-500/90 text-gray-900 border-red-400/40 hover:bg-red-500 shadow-lg">
-          <MicOff className="w-3 h-3 mr-1" />
-          <span className="font-medium">Silenciado</span>
-        </Badge>
-      );
-    }
+  const label = isMuted
+    ? "Silenciado"
+    : isListening
+      ? "Escuchando"
+      : isThinking
+        ? "Pensando"
+        : isSpeaking
+          ? "Hablando"
+          : connectionQuality === ConnectionQuality.BAD
+            ? "Conexión inestable"
+            : "Conectada";
+  const showMotion = isListening || isThinking || isSpeaking;
 
-    if (isListening) {
-      return (
-        <Badge className="status-badge glass-morphism-strong bg-emerald-500/90 text-gray-900 border-emerald-400/40 status-pulse hover:bg-emerald-500 shadow-lg">
-          <div className="voice-wave text-gray-900 mr-1">
-            <span></span>
-            <span></span>
-            <span></span>
-            <span></span>
-          </div>
-          <span className="font-medium">Escuchando</span>
-        </Badge>
-      );
-    }
-
-    if (isThinking) {
-      return (
-        <Badge className="status-badge glass-morphism-strong bg-amber-500/90 text-gray-900 border-amber-400/40 hover:bg-amber-500 shadow-lg">
-          <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-          <span className="font-medium">Pensando</span>
-        </Badge>
-      );
-    }
-
-    if (isSpeaking) {
-      return (
-        <Badge className="status-badge glass-morphism-strong bg-blue-500/90 text-gray-900 border-blue-400/40 hover:bg-blue-500 shadow-lg">
-          <div className="voice-wave text-gray-900 mr-1">
-            <span></span>
-            <span></span>
-            <span></span>
-            <span></span>
-          </div>
-          <span className="font-medium">Respondiendo</span>
-        </Badge>
-      );
-    }
-
-    return (
-      <Badge className="status-badge badge-ios hover:bg-white/40 shadow-md">
-        <div
-          className={`connection-dot ${connectionQuality === ConnectionQuality.GOOD ? "good" : connectionQuality === ConnectionQuality.BAD ? "bad" : "unknown"} dot-pulse mr-1`}
-        />
-        <span className="font-medium text-neutral-700">Conectado</span>
-      </Badge>
-    );
-  };
-
-  return <div className="absolute top-4 left-4 z-10">{getStatusContent()}</div>;
+  return (
+    <div className={styles.statusWrap} aria-live="polite">
+      <div className={styles.statusPill}>
+        {showMotion ? (
+          <span className={styles.voiceBars} aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </span>
+        ) : isMuted ? (
+          <MicOff size={15} aria-hidden="true" />
+        ) : (
+          <span
+            className={styles.recordDot}
+            style={{
+              background:
+                connectionQuality === ConnectionQuality.BAD
+                  ? "#e5484d"
+                  : "#7fb2f2",
+            }}
+            aria-hidden="true"
+          />
+        )}
+        <span>{label}</span>
+      </div>
+    </div>
+  );
 };
 
 // ============================================
@@ -289,19 +212,18 @@ const VoiceControls: React.FC<VoiceControlsProps> = ({
   if (!isActive) return null;
 
   return (
-    <Button
+    <button
+      type="button"
       onClick={onToggleMute}
-      variant="ghost"
-      size="icon"
-      className={`floating-glass rounded-full w-12 h-12 transition-all duration-300 ${
-        isMuted
-          ? "bg-red-500/90 hover:bg-red-500 text-gray-900 border-red-400/40 shadow-xl"
-          : "glass-morphism-dark text-gray-900 border-white/20 shadow-lg"
-      }`}
+      className={`${styles.roundControl} ${styles.muteControl} ${isMuted ? styles.mutedControl : ""}`}
       title={isMuted ? "Activar micrófono" : "Silenciar"}
+      aria-pressed={isMuted}
     >
-      {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-    </Button>
+      {isMuted ? <MicOff size={27} /> : <Mic size={27} />}
+      <span className={styles.srOnly}>
+        {isMuted ? "Activar micrófono" : "Silenciar micrófono"}
+      </span>
+    </button>
   );
 };
 
@@ -309,7 +231,8 @@ const VoiceControls: React.FC<VoiceControlsProps> = ({
 // LANDING SCREEN COMPONENT (shadcn/ui redesign)
 // ============================================
 interface LandingScreenProps {
-  onStartCall: () => void;
+  onViewSavedRoutine?: () => void;
+  onStartCall: () => Promise<void>;
   isLoading: boolean;
   userName?: string | null;
   customerData?: CustomerData | null;
@@ -318,6 +241,7 @@ interface LandingScreenProps {
 }
 
 const LandingScreen: React.FC<LandingScreenProps> = ({
+  onViewSavedRoutine,
   onStartCall,
   isLoading,
   userName,
@@ -326,68 +250,121 @@ const LandingScreen: React.FC<LandingScreenProps> = ({
   rateLimitCountdown = 0,
 }) => {
   const displayName = customerData?.firstName || userName;
+  const [showPermission, setShowPermission] = useState(false);
+  const [permissionDenied, setPermissionDenied] = useState(false);
+
+  const requestMicrophone = async () => {
+    setPermissionDenied(false);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((track) => track.stop());
+      await onStartCall();
+    } catch {
+      console.warn("[MIC] Permission request failed");
+      setPermissionDenied(true);
+    }
+  };
 
   return (
-    <div className="flex-1 w-full flex flex-col items-center justify-center p-6 landing-gradient min-h-screen">
-      <Card className="max-w-sm w-full card-ios border-0 shadow-2xl relative z-10">
-        <CardHeader className="text-center pb-2">
-          {/* Clara Avatar */}
-          <div className="avatar-ring-ios mx-auto mb-4">
-            <div className="h-20 w-20 rounded-full glass-morphism-strong flex items-center justify-center overflow-hidden p-3">
-              <Image
-                src="/images/clara-logo.png"
-                alt="Clara Logo"
-                width={80}
-                height={80}
-                className="w-full h-full object-contain"
-              />
+    <div className={styles.lightScreen}>
+      <BrandMark className={styles.topBrand} />
+      {showPermission && (
+        <button
+          type="button"
+          className={styles.backButton}
+          onClick={() => {
+            setShowPermission(false);
+            setPermissionDenied(false);
+          }}
+          aria-label="Volver"
+        >
+          <ChevronLeft size={20} />
+        </button>
+      )}
+
+      <main
+        className={styles.centerContent}
+        style={
+          !showPermission && onViewSavedRoutine
+            ? { paddingBottom: 200 }
+            : undefined
+        }
+      >
+        {showPermission ? (
+          <>
+            <div
+              className={`${styles.micHalo} ${permissionDenied ? styles.micHaloDenied : ""}`}
+            >
+              <div
+                className={`${styles.micDisc} ${permissionDenied ? styles.micDiscDenied : ""}`}
+              >
+                {permissionDenied ? <MicOff size={34} /> : <Mic size={34} />}
+              </div>
             </div>
-          </div>
+            <h1 className={`${styles.permissionTitle} ${styles.display}`}>
+              {permissionDenied
+                ? "Sin micrófono no puedo escucharte"
+                : "Para conversar con Clara necesitamos acceso a tu micrófono"}
+            </h1>
+            <p className={styles.subtitle}>
+              {permissionDenied
+                ? "Activá el permiso del micrófono en tu navegador y volvé a intentarlo."
+                : "Solo se usa mientras hablás con ella. Podés silenciarlo en cualquier momento."}
+            </p>
+          </>
+        ) : (
+          <>
+            <div className={styles.portraitHalo}>
+              <div className={styles.portraitDisc}>
+                <ClaraPortrait />
+              </div>
+            </div>
+            <h1 className={`${styles.title} ${styles.display}`}>
+              {displayName ? `Hola, ${displayName}` : "Hola, soy Clara"}
+            </h1>
+            <p className={styles.subtitle}>
+              Tu asesora virtual de skincare. Conversemos sobre tu piel y cómo
+              aprovechar mejor tus productos.
+            </p>
+          </>
+        )}
+      </main>
 
-          {/* Badge */}
-          <div className="badge-ios mx-auto mb-3 text-neutral-800">
-            <span
-              className="w-2 h-2 rounded-full animate-pulse"
-              style={{ backgroundColor: "var(--platinum-600)" }}
-            />
-            Clara Skin Care Assistant
-          </div>
-
-          <CardTitle className="text-2xl font-bold text-neutral-800">
-            {displayName ? `Hola, ${displayName}!` : "Hola!"}
-          </CardTitle>
-          <CardDescription className="text-base mt-2 text-neutral-600">
-            Soy Clara, tu asistente de belleza personal. Estoy aquí para
-            ayudarte a encontrar los productos perfectos para ti.
-          </CardDescription>
-        </CardHeader>
-
-        <CardContent className="pt-4">
-          <Button
-            onClick={onStartCall}
-            disabled={isLoading || isRateLimited}
-            size="lg"
-            className="btn-ios-primary"
+      <div className={styles.bottomActions}>
+        {!showPermission && onViewSavedRoutine && (
+          <button
+            type="button"
+            className={styles.secondaryButton}
+            onClick={onViewSavedRoutine}
+            disabled={isLoading}
           >
-            {isLoading ? (
-              <>
-                <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-                Conectando...
-              </>
-            ) : isRateLimited ? (
-              <>
-                <Clock className="w-5 h-5 mr-2" />
-                Espera {rateLimitCountdown}s
-              </>
-            ) : (
-              <>
-                <Phone className="w-5 h-5 mr-2" />
-                Iniciar Conversación
-              </>
-            )}
-          </Button>
-        </CardContent>
-      </Card>
+            Mi rutina guardada
+          </button>
+        )}
+        <button
+          type="button"
+          className={styles.primaryButton}
+          onClick={
+            showPermission ? requestMicrophone : () => setShowPermission(true)
+          }
+          disabled={isLoading || isRateLimited}
+        >
+          {isLoading
+            ? "Conectando con Clara…"
+            : isRateLimited
+              ? `Volvé a intentar en ${rateLimitCountdown}s`
+              : showPermission
+                ? permissionDenied
+                  ? "Volver a pedir permiso"
+                  : "Permitir micrófono"
+                : "Hablar con Clara"}
+        </button>
+        {isRateLimited && (
+          <p className={styles.errorNote}>
+            Alcanzaste el límite temporal de sesiones.
+          </p>
+        )}
+      </div>
     </div>
   );
 };
@@ -397,26 +374,19 @@ const LandingScreen: React.FC<LandingScreenProps> = ({
 // ============================================
 const ConnectingScreen: React.FC = () => {
   return (
-    <div className="flex-1 w-full flex flex-col items-center justify-center p-6 landing-gradient min-h-screen">
-      <Card className="max-w-sm w-full card-ios border-0 shadow-2xl relative z-10">
-        <CardContent className="pt-8 pb-8 text-center">
-          <div className="relative w-20 h-20 mx-auto mb-6">
-            <Skeleton className="w-20 h-20 rounded-full glass-morphism-subtle" />
-            <div className="absolute inset-0 flex items-center justify-center">
-              <Loader2
-                className="w-8 h-8 animate-spin"
-                style={{ color: "var(--platinum-700)" }}
-              />
-            </div>
-          </div>
-          <h2 className="text-xl font-semibold text-neutral-800 mb-2">
-            Conectando...
-          </h2>
-          <p className="text-neutral-600 text-sm font-medium">
-            Preparando a Clara
-          </p>
-        </CardContent>
-      </Card>
+    <div className={styles.darkScreen} role="status" aria-live="polite">
+      <BrandMark dark className={styles.topBrand} />
+      <div className={styles.connectingContent}>
+        <div className={styles.connectingPortrait}>
+          <ClaraPortrait compact />
+        </div>
+        <p className={`${styles.connectingLabel} ${styles.display}`}>
+          Conectando con Clara…
+        </p>
+        <div className={styles.progressTrack} aria-hidden="true">
+          <div className={styles.progressBar} />
+        </div>
+      </div>
     </div>
   );
 };
@@ -427,26 +397,102 @@ const ConnectingScreen: React.FC = () => {
 interface AvatarVideoProps {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   isStreamReady: boolean;
+  chromaKeyEnabled: boolean;
+  chromaSettings: ChromaSettings;
 }
 
+/**
+ * Avatar video with optional chroma key (green screen removal).
+ *
+ * DOM stack when chroma key is ON (matches HeyGen official bg-removal-demo):
+ *   <container>
+ *     <bg-layer />   ← transparent, color, or image background (z-0)
+ *     <video />      ← raw avatar stream, visibility:hidden keeps decoder alive (z-10)
+ *     <canvas />     ← processed frames with green removed (z-20)
+ *   </container>
+ *
+ * When chroma key is OFF: plain <video> element, no canvas.
+ *
+ * CRITICAL: video uses `visibility: hidden` (NOT opacity:0 or display:none)
+ * because the browser may pause the video decoder if the element is not visible.
+ *
+ * @see https://docs.liveavatar.com/docs/guides/change-background
+ */
 const AvatarVideo: React.FC<AvatarVideoProps> = ({
   videoRef,
   isStreamReady,
+  chromaKeyEnabled,
+  chromaSettings,
 }) => {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  const chromaConfig = useMemo<ChromaKeyConfig>(
+    () => ({
+      enabled: chromaKeyEnabled && isStreamReady,
+      options: {
+        ...(chromaSettings.minHue != null && { minHue: chromaSettings.minHue }),
+        ...(chromaSettings.maxHue != null && { maxHue: chromaSettings.maxHue }),
+        ...(chromaSettings.minSaturation != null && {
+          minSaturation: chromaSettings.minSaturation,
+        }),
+        ...(chromaSettings.edgeSharpness != null && {
+          edgeSharpness: chromaSettings.edgeSharpness,
+        }),
+      },
+    }),
+    [chromaKeyEnabled, isStreamReady, chromaSettings],
+  );
+
+  useChromaKey(videoRef, canvasRef, chromaConfig);
+
+  const { isDesktop: isDesktopBg } = useScreenSize();
+  const bgUrl = isDesktopBg
+    ? chromaSettings.bgUrlDesktop
+    : chromaSettings.bgUrlMobile;
+
   return (
-    <div className="avatar-container rounded-2xl overflow-hidden shadow-2xl">
+    <div className="avatar-container rounded-2xl overflow-hidden shadow-2xl relative">
       {!isStreamReady && (
         <div className="avatar-placeholder flex items-center justify-center">
           <div className="spinner w-8 h-8" />
         </div>
       )}
+
+      {/* Background layer (z-0) — transparent, or custom image via CHROMA_BG_URL */}
+      {chromaKeyEnabled && (
+        <div className="absolute inset-0 z-0">
+          {bgUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={bgUrl} alt="" className="w-full h-full object-cover" />
+          ) : null}
+        </div>
+      )}
+
+      {/* Raw video (z-10) — always playing so the canvas has a live source.
+          visibility:hidden keeps the decoder running; display:none would freeze it. */}
       <video
         ref={videoRef}
         autoPlay
         playsInline
         muted={false}
-        className={`w-full h-full object-cover transition-opacity duration-500 ${isStreamReady ? "opacity-100" : "opacity-0"}`}
+        className={`w-full h-full object-cover ${chromaKeyEnabled ? "absolute inset-0 z-10" : ""}`}
+        style={
+          chromaKeyEnabled
+            ? { visibility: isStreamReady ? "hidden" : "visible" }
+            : { opacity: isStreamReady ? 1 : 0, transition: "opacity 500ms" }
+        }
       />
+
+      {/* Chroma key canvas (z-20) — only rendered when enabled */}
+      {chromaKeyEnabled && (
+        <canvas
+          ref={canvasRef}
+          className="absolute inset-0 w-full h-full object-cover z-20"
+          style={{
+            visibility: isStreamReady ? "visible" : "hidden",
+          }}
+        />
+      )}
     </div>
   );
 };
@@ -456,898 +502,393 @@ const AvatarVideo: React.FC<AvatarVideoProps> = ({
 // ============================================
 interface ConnectedSessionProps {
   onEndCall: () => void;
+  isEnding: boolean;
+  canRetryStop: boolean;
+  chromaKeyEnabled: boolean;
+  chromaSettings: ChromaSettings;
 }
 
-const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
+const ConnectedSession: React.FC<ConnectedSessionProps> = ({
+  onEndCall,
+  isEnding,
+  canRetryStop,
+  chromaKeyEnabled,
+  chromaSettings,
+}) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const { isDesktop } = useScreenSize();
   const { fixedHeight, isInIframe } = useFixedHeight();
-  const [isMuted, setIsMuted] = useState(false);
 
-  // RUNTIME device detection - select appropriate audio config
-  const audioConfig = React.useMemo(() => {
-    const isMobile = isMobileDevice();
-    const config = isMobile ? MOBILE_CONFIG : DESKTOP_CONFIG;
-    console.log(
-      `[AUDIO] Runtime config: ${isMobile ? "MOBILE" : "DESKTOP"} | ` +
-        `Gap=${config.gapThreshold}ms | MaxBuffer=${config.maxBufferSamples} | ` +
-        `Phase1=${config.phase1LeadingSilence}ms | Phase2=${config.phase2LeadingSilence}ms`,
-    );
-    return config;
-  }, []);
+  // State from context — driven by SDK events (AgentEventsEnum / VoiceChatEvent)
+  const { sessionRef, customerData, isMuted, isUserTalking, isAvatarTalking } =
+    useLiveAvatarContext();
+  const { isStreamReady, connectionQuality, attachElement } = useSession();
 
-  // Session limit state
+  // Local state: "thinking" = between USER_SPEAK_ENDED and AVATAR_SPEAK_STARTED
+  const [isThinking, setIsThinking] = useState(false);
+  // Track subscription is not enough: wait for decoded/presented video frames.
+  const [isMediaPlaybackReady, setIsMediaPlaybackReady] = useState(false);
+
+  // Note: removed full-screen warmup overlay (it was covering the avatar
+  // while audio played). The AvatarVideo component already has its own
+  // in-container spinner shown while !isStreamReady — that disappears
+  // automatically once the stream attaches, without blocking the avatar.
+
+  // Session limit
   const [sessionSecondsRemaining, setSessionSecondsRemaining] = useState(
     SESSION_LIMIT_MINUTES * 60,
   );
   const [showExpiryWarning, setShowExpiryWarning] = useState(false);
   const sessionTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const keepAliveIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const deferredSessionStopRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
-  const { sessionRef, customerData } = useLiveAvatarContext();
-  const { isStreamReady, connectionQuality, attachElement } = useSession();
+  // Track if customer context has been sent (one-time per session)
+  const hasSentContextRef = useRef(false);
 
-  // Flag to prevent multiple agent connection attempts
-  const hasConnectedAgentRef = useRef(false);
+  // === SAFE CLIENT TELEMETRY (non-production only) ===
+  // Send only allowlisted event names; never send conversational or provider payloads.
+  const sendServerLog = useCallback(
+    (
+      event: SafeClientTelemetryEvent,
+      level: "info" | "warn" | "error" = "info",
+    ) => {
+      // NEXT_PUBLIC_VERCEL_ENV is available client-side; skip only in actual production
+      if (process.env.NEXT_PUBLIC_VERCEL_ENV === "production") return;
+      const device = isDesktop ? "desktop" : "mobile";
+      fetch("/api/client-log", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event,
+          level,
+          device,
+        }),
+      }).catch(() => {}); // Fire and forget
+    },
+    [isDesktop],
+  );
 
-  // Audio buffer - accumulate all chunks, send when gap detected
-  const audioBufferRef = useRef<string[]>([]);
-  const totalChunksReceivedRef = useRef(0);
-  const lastChunkTimeRef = useRef<number>(0);
-  const gapCheckIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  // === PLUGIN INIT: voiceChat verify → wait for greeting → contextual_update ===
+  // IMPORTANT: Do NOT send contextual_update before the greeting finishes.
+  // Sending commands too early can cause the ElevenLabs agent to reinitialize,
+  // creating multiple simultaneous conversations (observed: 3 conversations
+  // with 3 separate greetings, none responding to user input afterward).
+  //
+  // Flow: streamReady → verify mic → attach media → present stable video frames
+  //                  → contextual_update → greeting trigger
+  // REQUIRES: ElevenLabs agent dashboard → "First message" must be EMPTY.
+  const hasStartedVoiceChatRef = useRef(false);
+  const [isVoiceChatReady, setIsVoiceChatReady] = useState(false);
 
-  // Leading silence flag - add silence after interrupt to give HeyGen time
-  const isAfterInterruptRef = useRef(false);
+  // Step 1: On streamReady, ensure mic stays MUTED during greeting.
+  // The mic is unmuted in Step 3 (after AVATAR_SPEAK_ENDED) so the agent
+  // can't be interrupted by ambient noise or echo during its opening line.
+  useEffect(() => {
+    const session = sessionRef.current;
+    if (!isStreamReady || !session) return;
 
-  // TWO-PHASE strategy refs
-  const immediateSendTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const hassentImmediateRef = useRef(false); // Track if we already sent immediate chunks
-  const isFirstAudioRef = useRef(true); // Track if this is the first audio response
+    if (hasStartedVoiceChatRef.current) return;
+    hasStartedVoiceChatRef.current = true;
+    let cancelled = false;
 
-  // Ghost chunk debounce - ignore chunks arriving shortly after interruption
-  const lastInterruptTimeRef = useRef<number>(0);
+    const prepareVoiceChat = async () => {
+      const vcState = session.voiceChat.state;
+      const vcMuted = session.voiceChat.isMuted;
 
-  // Track if HeyGen is currently playing audio (for conditional interrupt handling)
-  const isSendingAudioRef = useRef(false);
+      console.info("[PLUGIN] voiceChat state observed");
+      sendServerLog("voicechat_state_observed");
 
-  // Track when audio was sent to HeyGen (for late transcript detection)
-  const audioSentTimeRef = useRef<number>(0);
+      try {
+        // Force-mute during greeting so ambient sound can't trigger an interrupt.
+        // Await startup completely: unmute() is intentionally ignored by the SDK
+        // while VoiceChat is STARTING, which previously left the call muted.
+        if (vcState === VoiceChatState.ACTIVE) {
+          if (!vcMuted) await session.voiceChat.mute();
+        } else {
+          console.log("[PLUGIN] VoiceChat not active, starting muted...");
+          await session.voiceChat.start({ defaultMuted: true });
+        }
 
-  // Track ElevenLabs source sample rate (for resampling)
-  const sourceRateRef = useRef<number>(16000);
+        if (cancelled) return;
+        if (session.voiceChat.state !== VoiceChatState.ACTIVE) {
+          throw new Error(
+            `VoiceChat did not become active (state=${session.voiceChat.state})`,
+          );
+        }
 
-  // Latency tracking refs - populated after useElevenLabsAgent is called
-  const reportAudioSentRef = useRef<(() => void) | null>(null);
-  const reportAvatarStartedRef = useRef<(() => void) | null>(null);
+        console.info("[PLUGIN] VoiceChat ready for greeting");
+        sendServerLog("voicechat_ready");
+        setIsVoiceChatReady(true);
+      } catch {
+        console.error("[PLUGIN] voiceChat preparation failed");
+        sendServerLog("voicechat_prepare_failed", "error");
+        hasStartedVoiceChatRef.current = false;
+        if (!cancelled) {
+          toast.error("No pudimos activar el micrófono", {
+            description: "Revisá el micrófono y volvé a intentar la llamada.",
+          });
+        }
+      }
+    };
 
-  // Audio fade-out refs for smooth interruptions
-  const fadeInProgressRef = useRef(false);
-  const fadeIntervalRef = useRef<NodeJS.Timeout | null>(null);
+    void prepareVoiceChat();
+    return () => {
+      cancelled = true;
+      // React Strict Mode runs an immediate setup → cleanup → setup cycle in
+      // development. Allow the second setup to finish mic preparation.
+      hasStartedVoiceChatRef.current = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isStreamReady]);
 
-  // Calculate total samples in buffer (for mobile buffer limit check)
-  // Used to prevent accumulating too much audio before processing
-  const calculateBufferSamples = useCallback((chunks: string[]): number => {
-    let totalBytes = 0;
-    for (const chunk of chunks) {
-      // base64 → bytes: multiply by 0.75
-      totalBytes += Math.round(chunk.length * 0.75);
-    }
-    // PCM 16-bit = 2 bytes per sample
-    return Math.floor(totalBytes / 2);
+  // Step 2: After real media playback readiness, do a 2-step handshake:
+  //
+  //   2a. contextual_update → inject customer info as silent context (no response)
+  //   2b. sendUserMessage("Hola") → trigger the agent's first response
+  //
+  // Why two steps: contextual_update is purely silent (stores info, doesn't
+  // trigger a response). sendUserMessage simulates a user message which DOES
+  // trigger a response — that response will use the context from step 2a.
+  // Reliable LiveKit publishes are awaited in order. This proves local publish
+  // settlement (not connector ingestion) and avoids timer-based ordering.
+  //
+  // REQUIRES: ElevenLabs agent dashboard → "First message" must be EMPTY.
+  useEffect(() => {
+    const session = sessionRef.current;
+    if (
+      !isStreamReady ||
+      !isMediaPlaybackReady ||
+      !isVoiceChatReady ||
+      !session
+    )
+      return;
+    if (hasSentContextRef.current) return;
+    hasSentContextRef.current = true;
+
+    console.info("[PLUGIN] Sending context and greeting trigger");
+
+    let cancelled = false;
+    const initializeGreeting = async () => {
+      const context = {
+        firstName: customerData?.firstName,
+        skinType: customerData?.skinType,
+        skinConcerns: customerData?.skinConcerns,
+        ordersCount: customerData?.ordersCount,
+        lastOrderProduct: customerData?.lastOrderProduct,
+        lastOrderDate: customerData?.lastOrderDate,
+        conversationMemory: customerData?.conversationMemory,
+      };
+
+      // Contextual updates are idempotent, so retry one rejected local publish.
+      try {
+        await sendCustomerContextAndWait(session, context);
+      } catch {
+        console.warn("[PLUGIN] Context publish rejected; retrying once");
+        try {
+          await sendCustomerContextAndWait(session, context);
+        } catch {
+          hasSentContextRef.current = false;
+          console.error("[PLUGIN] Context publish failed after retry");
+          sendServerLog("greeting_trigger_failed", "error");
+          return;
+        }
+      }
+
+      if (cancelled) return;
+      try {
+        console.info("[PLUGIN] Sending greeting trigger after context settled");
+        await session.sendUserMessageAndWait("[START]");
+        if (!cancelled) sendServerLog("greeting_triggered");
+      } catch {
+        hasSentContextRef.current = false;
+        console.error("[PLUGIN] greeting trigger publish failed");
+        sendServerLog("greeting_trigger_failed", "error");
+      }
+    };
+    void initializeGreeting();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isStreamReady, isMediaPlaybackReady, isVoiceChatReady, customerData]);
+
+  // Step 3: After the greeting finishes (first AVATAR_SPEAK_ENDED), unmute
+  // the mic so the user can respond. This prevents ambient noise from
+  // interrupting the greeting mid-sentence.
+  const hasUnmutedAfterGreetingRef = useRef(false);
+  useEffect(() => {
+    const session = sessionRef.current;
+    if (!session) return;
+
+    const onGreetingFinished = async () => {
+      if (hasUnmutedAfterGreetingRef.current) return;
+      hasUnmutedAfterGreetingRef.current = true;
+      console.info("[PLUGIN] Greeting completed");
+      sendServerLog("greeting_completed");
+
+      try {
+        if (session.voiceChat.state !== VoiceChatState.ACTIVE) {
+          throw new Error(
+            `Cannot unmute VoiceChat in state ${session.voiceChat.state}`,
+          );
+        }
+
+        await session.voiceChat.unmute();
+        if (session.voiceChat.isMuted) {
+          throw new Error("VoiceChat remained muted after unmute()");
+        }
+
+        console.info("[PLUGIN] Microphone ready for user input");
+        sendServerLog("microphone_ready");
+      } catch {
+        console.error("[PLUGIN] Microphone unmute failed");
+        sendServerLog("microphone_unmute_failed", "error");
+        toast.error("El micrófono sigue silenciado", {
+          description: "Tocá el botón del micrófono para activarlo.",
+        });
+      }
+      session.off(AgentEventsEnum.AVATAR_SPEAK_ENDED, onGreetingFinished);
+    };
+
+    session.on(AgentEventsEnum.AVATAR_SPEAK_ENDED, onGreetingFinished);
+    return () => {
+      session.off(AgentEventsEnum.AVATAR_SPEAK_ENDED, onGreetingFinished);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Fade out audio and then interrupt - provides smooth audio transition
-  const fadeOutAndInterrupt = useCallback(() => {
-    if (!AUDIO_FADE_ENABLED || !videoRef.current || !sessionRef.current) {
-      console.log("[FADE] Fade disabled or refs missing, immediate interrupt");
-      sessionRef.current?.interrupt();
+  // === DIAGNOSTIC: Test ElevenLabs agent with text message ===
+  const handleTestAgent = useCallback(() => {
+    const session = sessionRef.current;
+    if (!session) return;
+    try {
+      console.log("[DIAG] Sending test message via sendUserMessage...");
+      session.sendUserMessage("Hola, me puedes escuchar?");
+      console.log("[DIAG] sendUserMessage sent ✓");
+    } catch {
+      console.error("[DIAG] sendUserMessage failed");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Keep production diagnostics bounded. The former catch-all monkeypatch
+  // logged every provider/VAD event and could add main-thread pressure while
+  // displacing the lifecycle signals needed to investigate media problems.
+  useEffect(() => {
+    if (connectionQuality !== ConnectionQuality.BAD) return;
+    console.warn("[RTC] Connection quality degraded");
+    sendServerLog("connection_quality_bad", "warn");
+  }, [connectionQuality, sendServerLog]);
+
+  // === UI STATE: Derive "thinking" from SDK events ===
+  useEffect(() => {
+    const session = sessionRef.current;
+    if (!session) return;
+
+    const onUserSpeakEnded = () => {
+      console.log("[STATE] User stopped speaking → thinking");
+      setIsThinking(true);
+    };
+    const onAvatarSpeakStarted = () => {
+      console.log("[STATE] Avatar speaking → not thinking");
+      setIsThinking(false);
+    };
+    const onAvatarSpeakEnded = () => {
+      console.log("[STATE] Avatar finished speaking");
+      setIsThinking(false);
+    };
+
+    session.on(AgentEventsEnum.USER_SPEAK_ENDED, onUserSpeakEnded);
+    session.on(AgentEventsEnum.AVATAR_SPEAK_STARTED, onAvatarSpeakStarted);
+    session.on(AgentEventsEnum.AVATAR_SPEAK_ENDED, onAvatarSpeakEnded);
+
+    return () => {
+      session.off(AgentEventsEnum.USER_SPEAK_ENDED, onUserSpeakEnded);
+      session.off(AgentEventsEnum.AVATAR_SPEAK_STARTED, onAvatarSpeakStarted);
+      session.off(AgentEventsEnum.AVATAR_SPEAK_ENDED, onAvatarSpeakEnded);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Mute/unmute: SDK voiceChat handles mic + fires VoiceChatEvent
+  const handleToggleMute = useCallback(async () => {
+    const session = sessionRef.current;
+    if (!session) return;
+    try {
+      if (isMuted) {
+        await session.voiceChat.unmute();
+        console.log("[VOICECHAT] Unmuted");
+      } else {
+        await session.voiceChat.mute();
+        console.log("[VOICECHAT] Muted");
+      }
+    } catch {
+      console.error("[VOICECHAT] Toggle mute failed");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isMuted]);
+
+  // Attach tracks, then wait for actual presented frames before greeting.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!isStreamReady || !video) {
+      setIsMediaPlaybackReady(false);
       return;
     }
 
-    // Cancel any existing fade
-    if (fadeIntervalRef.current) {
-      clearInterval(fadeIntervalRef.current);
-      fadeIntervalRef.current = null;
-    }
-
-    console.log("[FADE] Starting fade-out with setInterval");
-
-    fadeInProgressRef.current = true;
-    const startVolume = videoRef.current.volume;
-    const startTime = Date.now();
-    const frameInterval = 16; // 60fps
-
-    // Immediate first frame
-    videoRef.current.volume = startVolume;
-
-    fadeIntervalRef.current = setInterval(() => {
-      try {
-        const elapsed = Date.now() - startTime;
-        const progress = Math.min(elapsed / AUDIO_FADE_DURATION_MS, 1);
-
-        console.log(
-          `[FADE] Frame: elapsed=${elapsed}ms, progress=${(progress * 100).toFixed(1)}%`,
-        );
-
-        // Ease-out quadratic for smooth deceleration
-        const eased = 1 - Math.pow(1 - progress, 2);
-        const newVolume = startVolume * (1 - eased);
-
-        if (videoRef.current) {
-          videoRef.current.volume = Math.max(0, newVolume);
-        } else {
-          console.warn("[FADE] videoRef.current is null during fade");
-        }
-
-        if (progress >= 1) {
-          // Fade complete - cleanup and interrupt
-          if (fadeIntervalRef.current) {
-            clearInterval(fadeIntervalRef.current);
-            fadeIntervalRef.current = null;
-          }
-
-          fadeInProgressRef.current = false;
-
-          // Restore volume for next response
-          if (videoRef.current) {
-            videoRef.current.volume = 1.0;
-          }
-
-          // NOW interrupt HeyGen
-          console.log("[FADE] Fade-out complete, calling interrupt()");
-          if (sessionRef.current) {
-            try {
-              sessionRef.current.interrupt();
-              console.log("[FADE] interrupt() executed successfully");
-            } catch (error) {
-              console.error("[FADE] Error calling interrupt():", error);
-            }
-          } else {
-            console.error(
-              "[FADE] sessionRef.current is null, cannot interrupt",
-            );
-          }
-        }
-      } catch (error) {
-        console.error("[FADE] Error in fade animation:", error);
-        // Cleanup on error
-        if (fadeIntervalRef.current) {
-          clearInterval(fadeIntervalRef.current);
-          fadeIntervalRef.current = null;
-        }
-        fadeInProgressRef.current = false;
-      }
-    }, frameInterval);
-  }, [sessionRef]);
-
-  // Generate silence in PCM 16-bit signed, 24kHz mono format (base64)
-  const generateSilence = useCallback((durationMs: number): string => {
-    const sampleRate = 24000;
-    const numSamples = Math.floor((durationMs / 1000) * sampleRate);
-    // PCM 16-bit = 2 bytes per sample
-    const buffer = new Uint8Array(numSamples * 2);
-    // All zeros = silence (16-bit signed PCM)
-    // buffer is already filled with zeros by default
-
-    // Convert to base64
-    let binary = "";
-    for (let i = 0; i < buffer.length; i++) {
-      binary += String.fromCharCode(buffer[i]!);
-    }
-    return btoa(binary);
-  }, []);
-
-  // Resample audio from source rate to target rate using linear interpolation
-  // Called ONCE on the entire concatenated audio to eliminate chunk boundary discontinuities
-  const resampleAudio = useCallback(
-    (
-      sourceBuffer: Int16Array,
-      sourceRate: number,
-      targetRate: number,
-    ): Int16Array => {
-      if (sourceRate === targetRate) return sourceBuffer;
-
-      const ratio = sourceRate / targetRate;
-      const targetLength = Math.round(sourceBuffer.length / ratio);
-      const targetBuffer = new Int16Array(targetLength);
-
-      for (let i = 0; i < targetLength; i++) {
-        const sourceIndex = i * ratio;
-        const indexFloor = Math.floor(sourceIndex);
-        const indexCeil = Math.min(indexFloor + 1, sourceBuffer.length - 1);
-        const fraction = sourceIndex - indexFloor;
-
-        targetBuffer[i] = Math.round(
-          sourceBuffer[indexFloor]! * (1 - fraction) +
-            sourceBuffer[indexCeil]! * fraction,
-        );
-      }
-
-      return targetBuffer;
-    },
-    [],
-  );
-
-  // Concatenate base64 audio chunks into a single base64 string
-  const concatenateBase64Audio = useCallback((chunks: string[]): string => {
-    if (chunks.length === 0) return "";
-    if (chunks.length === 1) return chunks[0]!;
-
-    // Decode all chunks to binary
-    const binaryChunks = chunks.map((chunk) => {
-      const binaryString = atob(chunk);
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
-      return bytes;
+    const abortController = new AbortController();
+    const readiness = waitForMediaPlaybackReady(video, {
+      signal: abortController.signal,
     });
 
-    // Calculate total length
-    const totalLength = binaryChunks.reduce(
-      (sum, chunk) => sum + chunk.length,
-      0,
-    );
+    attachElement(video);
 
-    // Concatenate all chunks
-    const result = new Uint8Array(totalLength);
-    let offset = 0;
-    for (const chunk of binaryChunks) {
-      result.set(chunk, offset);
-      offset += chunk.length;
-    }
+    readiness
+      .then((result) => {
+        const metric =
+          `[MEDIA_READY] reason=${result.reason}` +
+          ` elapsed_ms=${Math.round(result.elapsedMs)}` +
+          ` frames=${result.framesPresented}` +
+          ` ready_state=${result.readyState}` +
+          ` chroma=${chromaKeyEnabled}`;
 
-    // Encode back to base64
-    let binary = "";
-    for (let i = 0; i < result.length; i++) {
-      binary += String.fromCharCode(result[i]!);
-    }
-    return btoa(binary);
-  }, []);
-
-  // Helper: Wait for avatar to finish current audio segment
-  const waitForAvatarSpeakEnded = useCallback(
-    (timeoutMs: number = CHUNK_WAIT_TIMEOUT_MS): Promise<void> => {
-      return new Promise((resolve) => {
-        const session = sessionRef.current;
-        if (!session) {
-          resolve();
-          return;
+        if (result.reason === "timeout") {
+          console.warn(metric);
+          sendServerLog("media_ready_timeout", "warn");
+        } else {
+          console.info(metric);
+          sendServerLog("media_ready");
         }
-
-        const handler = () => {
-          session.off(AgentEventsEnum.AVATAR_SPEAK_ENDED, handler);
-          clearTimeout(timeout);
-          console.log("[AUDIO] avatar.speak_ended received");
-          resolve();
-        };
-
-        const timeout = setTimeout(() => {
-          session.off(AgentEventsEnum.AVATAR_SPEAK_ENDED, handler);
-          console.warn(
-            `[AUDIO] Timeout (${timeoutMs}ms) waiting for avatar.speak_ended`,
-          );
-          resolve(); // Continue anyway
-        }, timeoutMs);
-
-        session.on(AgentEventsEnum.AVATAR_SPEAK_ENDED, handler);
+        setIsMediaPlaybackReady(true);
+      })
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === "AbortError")
+          return;
+        console.error("[MEDIA_READY] readiness probe failed");
+        setIsMediaPlaybackReady(true);
       });
-    },
-    [sessionRef],
-  );
 
-  // Split base64 audio into chunks of maxBytes (in decoded bytes)
-  const smartSplitAudio = useCallback(
-    (audioBase64: string, maxBytes: number): string[] => {
-      // Base64: 4 chars = 3 bytes, so maxChars = maxBytes * 4 / 3
-      const maxChars = Math.floor((maxBytes * 4) / 3);
-      const chunks: string[] = [];
+    return () => abortController.abort();
+  }, [isStreamReady, attachElement, chromaKeyEnabled, sendServerLog]);
 
-      for (let i = 0; i < audioBase64.length; i += maxChars) {
-        chunks.push(audioBase64.slice(i, i + maxChars));
-      }
-
-      return chunks;
-    },
-    [],
-  );
-
-  // Send large audio in sequential chunks (waits for each to finish)
-  const sendChunkedAudio = useCallback(
-    async (audioBase64: string) => {
-      const chunks = smartSplitAudio(audioBase64, MAX_AUDIO_SIZE_BYTES);
-      console.log(
-        `[AUDIO] Smart chunking: ${chunks.length} segments of ~${Math.round(MAX_AUDIO_SIZE_BYTES / 1024)}KB`,
-      );
-
-      for (let i = 0; i < chunks.length; i++) {
-        // DOUBLE CHECK: Both flag AND timestamp-based interrupt detection
-        const timeSinceInterrupt = Date.now() - lastInterruptTimeRef.current;
-
-        // Check 1: Flag-based (set to false when interruption occurs)
-        if (!isSendingAudioRef.current && i > 0) {
-          console.log(
-            `[SEND] ⛔ Chunk ${i + 1}/${chunks.length} stopped - isSendingAudioRef=false`,
-          );
-          break;
-        }
-
-        // Check 2: Timestamp-based (recent interrupt blocks all sends)
-        if (timeSinceInterrupt < INTERRUPT_BLOCK_WINDOW_MS) {
-          console.log(
-            `[SEND] ⛔ Chunk ${i + 1}/${chunks.length} blocked - interrupt ${timeSinceInterrupt}ms ago`,
-          );
-          break;
-        }
-
-        const chunk = chunks[i]!;
-        const sizeKB = Math.round((chunk.length * 0.75) / 1024);
-
-        console.log(`[SEND] ✅ Chunk ${i + 1}/${chunks.length} (${sizeKB}KB)`);
-
-        // Report audio sent for latency tracking (only first chunk)
-        if (i === 0) {
-          reportAudioSentRef.current?.();
-          // Track when audio was sent (for late transcript detection)
-          audioSentTimeRef.current = Date.now();
-        }
-
-        isSendingAudioRef.current = true;
-        sessionRef.current?.repeatAudio(chunk);
-
-        // Wait for this chunk to finish before sending next
-        if (i < chunks.length - 1) {
-          await waitForAvatarSpeakEnded();
-        }
-      }
-
-      console.log(
-        `[AUDIO] Smart chunking complete: ${chunks.length} chunks sent`,
-      );
-    },
-    [smartSplitAudio, waitForAvatarSpeakEnded, sessionRef],
-  );
-
-  // Send ALL accumulated audio to avatar (called when gap detected or agent_response_end)
-  // HYBRID: Resamples once after concatenation, adds silence, uses Smart Chunking for large audio
-  // isImmediateSend: true for PHASE 1 (first words, minimal silence), false for PHASE 2 (rest of response)
-  const sendAllAudioToAvatar = useCallback(
-    (isImmediateSend: boolean = false) => {
-      // Clear gap check interval
-      if (gapCheckIntervalRef.current) {
-        clearInterval(gapCheckIntervalRef.current);
-        gapCheckIntervalRef.current = null;
-      }
-
-      // Clear immediate send timeout (TWO-PHASE cleanup)
-      if (immediateSendTimeoutRef.current) {
-        clearTimeout(immediateSendTimeoutRef.current);
-        immediateSendTimeoutRef.current = null;
-      }
-
-      if (audioBufferRef.current.length === 0) {
-        console.log("[AUDIO] No audio to send");
-        return;
-      }
-
-      const chunks = audioBufferRef.current;
-      audioBufferRef.current = [];
-
-      // 1. Concatenate all RAW chunks (still at source sample rate, e.g., 16kHz)
-      const concatenatedRaw = concatenateBase64Audio(chunks);
-      if (!concatenatedRaw || !sessionRef.current) return;
-
-      // 2. Decode base64 → Int16Array (raw PCM)
-      const binaryString = atob(concatenatedRaw);
-      const rawBytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        rawBytes[i] = binaryString.charCodeAt(i);
-      }
-      const sourceBuffer = new Int16Array(rawBytes.buffer);
-
-      // 3. Resample ONCE from source rate (16kHz) to target rate (24kHz)
-      const sourceRate = sourceRateRef.current;
-      const resampledBuffer = resampleAudio(
-        sourceBuffer,
-        sourceRate,
-        TARGET_SAMPLE_RATE,
-      );
-
-      console.log(
-        `[AUDIO] Resampled: ${sourceBuffer.length} samples @ ${sourceRate}Hz → ${resampledBuffer.length} samples @ ${TARGET_SAMPLE_RATE}Hz`,
-      );
-
-      // 4. Encode resampled audio back to base64
-      let binary = "";
-      const resampledBytes = new Uint8Array(resampledBuffer.buffer);
-      for (let i = 0; i < resampledBytes.length; i++) {
-        binary += String.fromCharCode(resampledBytes[i]!);
-      }
-      let finalAudio = btoa(binary);
-
-      // 5. Add leading + trailing silence (DIFFERENTIATED BY PHASE)
-      // Uses runtime audioConfig for device-specific values
-      const leadingSilenceMs = isImmediateSend
-        ? audioConfig.phase1LeadingSilence
-        : audioConfig.phase2LeadingSilence;
-      const trailingSilenceMs = isImmediateSend
-        ? audioConfig.phase1TrailingSilence
-        : audioConfig.phase2TrailingSilence;
-
-      const leadingSilence = generateSilence(leadingSilenceMs);
-      const trailingSilence = generateSilence(trailingSilenceMs);
-
-      // Only add silence if duration > 0
-      const audioWithSilence = [finalAudio];
-      if (leadingSilenceMs > 0) audioWithSilence.unshift(leadingSilence);
-      if (trailingSilenceMs > 0) audioWithSilence.push(trailingSilence);
-      finalAudio = concatenateBase64Audio(audioWithSilence);
-
-      // Log with phase info
-      const phaseLabel = isImmediateSend ? "PHASE 1 (fast)" : "PHASE 2";
-      const interruptNote = isAfterInterruptRef.current
-        ? " (post-interrupt)"
-        : "";
-      console.log(
-        `[AUDIO] ${phaseLabel}: ${leadingSilenceMs}ms lead + ${trailingSilenceMs}ms trail${interruptNote}`,
-      );
-
-      // Reset interrupt flag
-      if (isAfterInterruptRef.current) {
-        isAfterInterruptRef.current = false;
-      }
-
-      // === SMART CHUNKING: Check size and split if needed ===
-      const audioSizeBytes = Math.round(finalAudio.length * 0.75);
-      const audioSizeKB = Math.round(audioSizeBytes / 1024);
-      const estimatedDurationSec = audioSizeKB / 48; // ~48KB/s @ 24kHz 16-bit
-
-      console.log(
-        `[AUDIO] Size: ${audioSizeKB}KB (~${estimatedDurationSec.toFixed(1)}s)`,
-      );
-
-      if (audioSizeBytes > MAX_AUDIO_SIZE_BYTES) {
-        // INTERRUPT CHECK: Verify no recent interrupt before chunked send
-        const timeSinceInterrupt = Date.now() - lastInterruptTimeRef.current;
-        if (timeSinceInterrupt < INTERRUPT_BLOCK_WINDOW_MS) {
-          console.log(
-            `[SEND] ⛔ BLOCKED large audio - recent interrupt (${timeSinceInterrupt}ms ago)`,
-          );
-          audioBufferRef.current = [];
-          return;
-        }
-
-        console.log(
-          `[AUDIO] Audio too large (${audioSizeKB}KB > ${Math.round(MAX_AUDIO_SIZE_BYTES / 1024)}KB), using smart chunking`,
-        );
-        // Send chunked - function handles isSendingAudioRef internally
-        sendChunkedAudio(finalAudio);
-        return; // Exit - chunked send handles everything
-      }
-
-      // === Normal path: audio is small enough for single send ===
-      const totalSizeKB = Math.round(finalAudio.length / 1024);
-      const isFirstAudio = isFirstAudioRef.current;
-
-      if (isFirstAudio) {
-        isFirstAudioRef.current = false;
-        console.log(
-          `[AUDIO] GREETING SENT: ${chunks.length} chunks, ${totalSizeKB}KB, single repeatAudio() call`,
-        );
-      } else {
-        console.log(
-          `[AUDIO] Response sent: ${chunks.length} chunks, ${totalSizeKB}KB`,
-        );
-      }
-
-      // 6. INTERRUPT CHECK: Verify no recent interrupt before sending
-      const timeSinceInterrupt = Date.now() - lastInterruptTimeRef.current;
-      if (timeSinceInterrupt < INTERRUPT_BLOCK_WINDOW_MS) {
-        console.log(
-          `[SEND] ⛔ BLOCKED - recent interrupt (${timeSinceInterrupt}ms ago)`,
-        );
-        audioBufferRef.current = [];
-        return;
-      }
-
-      // 7. Send ALL audio in a single call
-      console.log(
-        `[SEND] ✅ Sending complete audio (${totalSizeKB}KB) - ${timeSinceInterrupt}ms since last interrupt`,
-      );
-      try {
-        // Report audio sent for latency tracking
-        reportAudioSentRef.current?.();
-
-        // Track when audio was sent (for late transcript detection)
-        audioSentTimeRef.current = Date.now();
-
-        isSendingAudioRef.current = true;
-        sessionRef.current.repeatAudio(finalAudio);
-      } catch (error) {
-        console.error("Error sending audio to avatar:", error);
-        isSendingAudioRef.current = false;
-      }
-    },
-    [
-      audioConfig,
-      concatenateBase64Audio,
-      generateSilence,
-      resampleAudio,
-      sendChunkedAudio,
-      sessionRef,
-    ],
-  );
-
-  // Start gap detection - checks if stream ended by detecting pause between chunks
-  const startGapDetection = useCallback(() => {
-    // Clear any existing interval
-    if (gapCheckIntervalRef.current) {
-      clearInterval(gapCheckIntervalRef.current);
-    }
-
-    // Check every 50ms if there's a gap in chunks
-    // Uses runtime audioConfig.gapThreshold for device-specific timing
-    gapCheckIntervalRef.current = setInterval(() => {
-      const timeSinceLastChunk = Date.now() - lastChunkTimeRef.current;
-
-      // If gap exceeds threshold, stream has ended - send buffered audio
-      if (
-        timeSinceLastChunk >= audioConfig.gapThreshold &&
-        audioBufferRef.current.length > 0
-      ) {
-        console.log(
-          `[AUDIO] Gap detected (${timeSinceLastChunk}ms >= ${audioConfig.gapThreshold}ms) - sending buffered audio`,
-        );
-        sendAllAudioToAvatar();
-      }
-    }, 50);
-  }, [sendAllAudioToAvatar, audioConfig.gapThreshold]);
-
-  // ElevenLabs Agent hook - SIMPLE: accumulate all chunks, send when gap detected
-  const {
-    isConnected: isAgentConnected,
-    isListening,
-    isThinking,
-    isSpeaking,
-    connect: connectAgent,
-    disconnect: disconnectAgent,
-    startListening,
-    stopListening,
-    error: agentError,
-    // Latency tracking
-    reportAudioSent,
-    reportAvatarStarted,
-  } = useElevenLabsAgent({
-    // Pass customer data for ElevenLabs dynamic variables personalization
-    customerData: customerData
-      ? {
-          firstName: customerData.firstName,
-          lastName: customerData.lastName,
-          email: customerData.email,
-          skinType: customerData.skinType,
-          skinConcerns: customerData.skinConcerns,
-          ordersCount: customerData.ordersCount,
-        }
-      : undefined,
-    onAudioData: (audioBase64, sampleRate) => {
-      // DEBOUNCE: Ignore "ghost" chunks that arrive shortly after interruption
-      // These are in-flight chunks from the previous response
-      const timeSinceInterrupt = Date.now() - lastInterruptTimeRef.current;
-      if (timeSinceInterrupt < INTERRUPT_DEBOUNCE_MS) {
-        console.log(
-          `[AUDIO] Ignoring ghost chunk (${timeSinceInterrupt}ms since interrupt)`,
-        );
-        return;
-      }
-
-      // Store source sample rate from first chunk (used for resampling after concatenation)
-      if (totalChunksReceivedRef.current === 0) {
-        sourceRateRef.current = sampleRate;
-        console.log(`[AUDIO] Source sample rate: ${sampleRate}Hz`);
-      }
-
-      // Accumulate RAW chunks (no resampling) - resampling happens ONCE after concatenation
-      totalChunksReceivedRef.current++;
-      audioBufferRef.current.push(audioBase64);
-      lastChunkTimeRef.current = Date.now();
-
-      const currentBufferLength = audioBufferRef.current.length;
-      const currentSamplesForLog = calculateBufferSamples(
-        audioBufferRef.current,
-      );
-      console.log(
-        `[AUDIO] Chunk #${totalChunksReceivedRef.current}, buffer: ${currentSamplesForLog} samples (${currentBufferLength} chunks), isGreeting: ${isFirstAudioRef.current}`,
-      );
-
-      // TWO-PHASE STRATEGY:
-      // Phase 1: Send first chunk IMMEDIATELY (contains first words - reduces perceived latency)
-      // This is SYNCHRONOUS - no timeout, no delay, just send NOW
-      // GREETING FIX: Skip PHASE 1 for greeting to accumulate more audio
-      if (!hassentImmediateRef.current && currentBufferLength === 1) {
-        if (isFirstAudioRef.current && GREETING_SKIP_PHASE1) {
-          console.log("[AUDIO] GREETING: Skipping PHASE 1 (immediate send)");
-          // Don't send yet - continue to gap detection or buffer limit
-        } else {
-          // TRUNCATION FIX: Check if first chunk has enough audio content
-          // Calculate samples from first chunk (base64 → bytes → samples)
-          const firstChunk = audioBufferRef.current[0]!;
-          const estimatedSamples = Math.round((firstChunk.length * 0.75) / 2);
-
-          // Device-aware threshold to prevent mobile truncation
-          const isMobile = isMobileDevice();
-          const minPhase1Samples = getMinPhase1Samples(isMobile);
-
-          if (estimatedSamples < minPhase1Samples) {
-            console.log(
-              `[AUDIO] PHASE 1 [${isMobile ? "MOBILE" : "DESKTOP"}]: First chunk too small (${estimatedSamples}/${minPhase1Samples} samples), waiting for more`,
-            );
-            // Don't send yet - let gap detection or buffer limit handle it
-            // Continue to PHASE 2 logic below
-          } else {
-            hassentImmediateRef.current = true;
-            console.log(
-              `[AUDIO] PHASE 1 [${isMobile ? "MOBILE" : "DESKTOP"}]: IMMEDIATE send with sufficient content (${estimatedSamples} samples, threshold: ${minPhase1Samples})`,
-            );
-            // Send synchronously - first words go out ASAP
-            sendAllAudioToAvatar(true); // isImmediateSend = true for minimal silence
-            return;
-          }
-        }
-      }
-
-      // MOBILE OPTIMIZATION: Check if buffer exceeds limit
-      // Mobile CPUs struggle with large resamples - process in smaller batches
-      // Uses runtime audioConfig.maxBufferSamples for device-specific limits
-      // GREETING FIX: Skip buffer limit for greeting to accumulate full message
-      const currentSamples = calculateBufferSamples(audioBufferRef.current);
-      if (currentSamples >= audioConfig.maxBufferSamples) {
-        if (isFirstAudioRef.current && GREETING_SKIP_PHASE1) {
-          console.log(
-            `[AUDIO] GREETING: Skipping buffer limit (${currentSamples}/${audioConfig.maxBufferSamples} samples) - accumulating more`,
-          );
-          // Continue to gap detection - don't return
-        } else {
-          console.log(
-            `[AUDIO] BUFFER LIMIT: ${currentSamples} samples >= ${audioConfig.maxBufferSamples}, processing NOW`,
-          );
-          // Clear gap detection since we're processing now
-          if (gapCheckIntervalRef.current) {
-            clearInterval(gapCheckIntervalRef.current);
-            gapCheckIntervalRef.current = null;
-          }
-          sendAllAudioToAvatar(false); // PHASE 2 style padding
-          return;
-        }
-      }
-
-      // Phase 2: For remaining chunks, use gap detection
-      if (!gapCheckIntervalRef.current) {
-        startGapDetection();
-      }
-    },
-    onAgentResponseEnd: () => {
-      // Agent finished speaking - send immediately (faster than timeout)
-      console.log("[AUDIO] agent_response_end received, sending all audio now");
-      sendAllAudioToAvatar();
-    },
-    onAgentResponse: () => {
-      console.log("[AUDIO] agent_response received - new response starting");
-
-      // GREETING FIX: Reset interrupt debounce to accept new audio chunks immediately
-      // Without this, fast responses (<300ms) get discarded as "ghost chunks"
-      lastInterruptTimeRef.current = 0;
-      console.log("[AUDIO] Reset interrupt debounce for new response");
-    },
-    onInterruption: (vadInfo: VadInfo) => {
-      // ElevenLabs confirmed user interrupted - trust their detection system
-      const interruptTime = Date.now();
-      console.log(`[INTERRUPT] ══════════════════════════════════════`);
-      console.log(`[INTERRUPT] Valid interruption at T=${interruptTime}`);
-      console.log(
-        `[INTERRUPT] VAD: ${vadInfo.vadScore.toFixed(2)}, Duration: ${vadInfo.speechDuration}ms`,
-      );
-
-      // Set flag to add leading silence on next response (gives HeyGen time after interrupt)
-      isAfterInterruptRef.current = true;
-
-      // Record interrupt time for debounce (ignore ghost chunks)
-      lastInterruptTimeRef.current = interruptTime;
-
-      // Clear buffer and stop gap detection
-      if (gapCheckIntervalRef.current) {
-        clearInterval(gapCheckIntervalRef.current);
-        gapCheckIntervalRef.current = null;
-      }
-
-      // Clear immediate send timeout (TWO-PHASE cleanup)
-      if (immediateSendTimeoutRef.current) {
-        clearTimeout(immediateSendTimeoutRef.current);
-        immediateSendTimeoutRef.current = null;
-      }
-
-      audioBufferRef.current = [];
-      totalChunksReceivedRef.current = 0;
-      hassentImmediateRef.current = false; // Reset for next response
-      isSendingAudioRef.current = false; // Reset sending state
-
-      // CRITICAL: Interrupt HeyGen avatar playback with smooth fade-out
-      console.log(`[INTERRUPT] Initiating fade-out and interrupt`);
-      fadeOutAndInterrupt();
-      console.log(`[INTERRUPT] ══════════════════════════════════════`);
-    },
-    onUserTranscript: (text, vadInfo) => {
-      console.log("[AUDIO] User said:", text);
-
-      // Filter out noise/empty transcripts
-      const cleanText = text?.trim().replace(/\./g, "").trim() || "";
-      if (cleanText.length < 2) {
-        console.log("[AUDIO] Ignoring noise/empty transcript");
-        return;
-      }
-
-      // CONDITIONAL INTERRUPT: Only clear buffer if avatar is CURRENTLY speaking
-      // If avatar finished, chunks arriving are from the NEW response - preserve them
-      if (isSendingAudioRef.current) {
-        // Check if this is a LATE transcript (arrived shortly after audio was sent)
-        // On mobile, transcripts can arrive 3-50ms after audio was already sent
-        // Users cannot realistically interrupt within 100ms of receiving audio
-        const timeSinceAudioSent = Date.now() - audioSentTimeRef.current;
-
-        if (timeSinceAudioSent < AUDIO_SENT_GRACE_PERIOD_MS) {
-          console.log(
-            `[AUDIO] Ignoring late transcript (${timeSinceAudioSent}ms since audio sent)`,
-          );
-          return; // Don't clear buffer - this is a late transcript, not a real interruption
-        }
-
-        // SMART INTERRUPTION: Check VAD score if available
-        if (SMART_INTERRUPTION_ENABLED && vadInfo) {
-          if (vadInfo.vadScore < MIN_VAD_SCORE_FOR_INTERRUPT) {
-            console.log(
-              `[AUDIO] Ignoring transcript interruption - low VAD (${vadInfo.vadScore.toFixed(2)})`,
-            );
-            return;
-          }
-        }
-
-        console.log("[AUDIO] User interrupted active speech - clearing buffer");
-
-        // Record interrupt time for debounce (ignore ghost chunks)
-        lastInterruptTimeRef.current = Date.now();
-
-        // Cancel gap detection
-        if (gapCheckIntervalRef.current) {
-          clearInterval(gapCheckIntervalRef.current);
-          gapCheckIntervalRef.current = null;
-        }
-
-        // Clear immediate send timeout
-        if (immediateSendTimeoutRef.current) {
-          clearTimeout(immediateSendTimeoutRef.current);
-          immediateSendTimeoutRef.current = null;
-        }
-
-        // Clear audio state
-        audioBufferRef.current = [];
-        isSendingAudioRef.current = false;
-        hassentImmediateRef.current = false;
-
-        // Set flag for leading silence on next response
-        isAfterInterruptRef.current = true;
-
-        // Interrupt HeyGen avatar playback with smooth fade-out
-        fadeOutAndInterrupt();
-      } else {
-        // Avatar already finished - don't clear buffer, don't set debounce
-        // Chunks arriving are from the NEW response being generated
-        console.log(
-          "[AUDIO] User spoke after avatar finished - preserving buffer",
-        );
-
-        // CRITICAL FIX: Reset hassentImmediateRef for the NEW conversation turn
-        // Without this, PHASE 1 (100ms silence) is skipped and only PHASE 2 (80ms) runs
-        // This caused first words to be cut off on subsequent responses
-        hassentImmediateRef.current = false;
-
-        // Set the interrupt flag for leading silence on next response
-        isAfterInterruptRef.current = true;
-      }
-    },
-    onError: (error) => {
-      console.error("Agent error:", error);
-    },
-  });
-
-  // Populate latency tracking refs (for use in callbacks defined before useElevenLabsAgent)
-  useEffect(() => {
-    reportAudioSentRef.current = reportAudioSent;
-    reportAvatarStartedRef.current = reportAvatarStarted;
-  }, [reportAudioSent, reportAvatarStarted]);
-
-  // Attach video element when stream is ready
-  useEffect(() => {
-    if (isStreamReady && videoRef.current) {
-      attachElement(videoRef.current);
-    }
-  }, [isStreamReady, attachElement]);
-
-  // Connect to ElevenLabs agent when avatar stream is ready
-  useEffect(() => {
-    // Use ref flag to ensure we only connect once
-    if (isStreamReady && !hasConnectedAgentRef.current) {
-      hasConnectedAgentRef.current = true;
-      console.log("Connecting to ElevenLabs agent...");
-      connectAgent();
-    }
-  }, [isStreamReady, connectAgent]);
-
-  // Cleanup on unmount - empty deps to run only once on true unmount
-  useEffect(() => {
-    return () => {
-      disconnectAgent();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Listen for AVATAR_SPEAK_STARTED to track HeyGen latency
+  // Keep-alive with margin before the provider's five-minute boundary.
   useEffect(() => {
     const session = sessionRef.current;
     if (!session) return;
 
-    const handleAvatarSpeakStarted = () => {
-      console.log("[LATENCY] Avatar started speaking");
-      reportAvatarStartedRef.current?.();
-    };
-
-    session.on(AgentEventsEnum.AVATAR_SPEAK_STARTED, handleAvatarSpeakStarted);
-
-    return () => {
-      session.off(
-        AgentEventsEnum.AVATAR_SPEAK_STARTED,
-        handleAvatarSpeakStarted,
-      );
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Listen for AVATAR_SPEAK_ENDED to reset sending state
-  useEffect(() => {
-    const session = sessionRef.current;
-    if (!session) return;
-
-    const handleAvatarSpeakEnded = () => {
-      console.log("[AUDIO] Avatar finished speaking");
-      isSendingAudioRef.current = false;
-    };
-
-    session.on(AgentEventsEnum.AVATAR_SPEAK_ENDED, handleAvatarSpeakEnded);
-
-    return () => {
-      session.off(AgentEventsEnum.AVATAR_SPEAK_ENDED, handleAvatarSpeakEnded);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Keep-alive interval to prevent HeyGen session timeout (10 min inactivity)
-  const keepAliveIntervalRef = useRef<NodeJS.Timeout | null>(null);
-
-  useEffect(() => {
-    const session = sessionRef.current;
-    if (!session) return;
-
-    // Send keep-alive every 5 minutes to prevent timeout
     keepAliveIntervalRef.current = setInterval(
       () => {
         session
           .keepAlive()
-          .then(() => {
-            console.log("[HEYGEN] Keep-alive sent successfully");
-          })
-          .catch((error) => {
-            console.warn("[HEYGEN] Keep-alive failed:", error);
-          });
+          .then(() => console.log("[HEYGEN] Keep-alive sent"))
+          .catch(() => console.warn("[HEYGEN] Keep-alive failed"));
       },
-      5 * 60 * 1000,
-    ); // 5 minutes
+      4 * 60 * 1000,
+    );
 
     return () => {
       if (keepAliveIntervalRef.current) {
@@ -1358,19 +899,16 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Session limit timer - only runs if SESSION_LIMIT_ENABLED is true
+  // Session limit timer
   useEffect(() => {
     if (!SESSION_LIMIT_ENABLED) return;
 
     sessionTimerRef.current = setInterval(() => {
       setSessionSecondsRemaining((prev) => {
         const newValue = prev - 1;
-
-        // Show warning when approaching limit
         if (newValue <= SESSION_WARNING_SECONDS && newValue > 0) {
           setShowExpiryWarning(true);
         }
-
         return newValue <= 0 ? 0 : newValue;
       });
     }, 1000);
@@ -1383,7 +921,7 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
     };
   }, []);
 
-  // Handle session expiry - separate effect to avoid setState during render
+  // Handle session expiry
   useEffect(() => {
     if (SESSION_LIMIT_ENABLED && sessionSecondsRemaining <= 0) {
       console.log("[SESSION] Time limit reached, ending session");
@@ -1391,122 +929,156 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
     }
   }, [sessionSecondsRemaining, onEndCall]);
 
-  const handleToggleMute = useCallback(() => {
-    if (isMuted) {
-      startListening();
-      setIsMuted(false);
-    } else {
-      stopListening();
-      setIsMuted(true);
-    }
-  }, [isMuted, startListening, stopListening]);
-
-  // Cleanup on unmount - prevent memory leaks from intervals
+  // Cleanup on unmount
   useEffect(() => {
+    const session = sessionRef.current;
+    const stopOnPageUnload = () => {
+      void session?.stop().catch(() => {
+        console.error("[SESSION] Cleanup during page unload failed");
+      });
+    };
+
+    // Some embedded browsers emit pagehide when merely changing tabs. Ending
+    // there closes a healthy call. beforeunload is reserved for real
+    // navigation/close; React unmount remains the in-app cleanup path.
+    window.addEventListener("beforeunload", stopOnPageUnload);
+
+    // Cancel the deferred stop scheduled by React Strict Mode's development
+    // cleanup when the component is immediately mounted again.
+    if (deferredSessionStopRef.current) {
+      clearTimeout(deferredSessionStopRef.current);
+      deferredSessionStopRef.current = null;
+    }
+
     return () => {
-      // Cleanup gap detection interval
-      if (gapCheckIntervalRef.current) {
-        clearInterval(gapCheckIntervalRef.current);
-        gapCheckIntervalRef.current = null;
-      }
-      // Cleanup immediate send timeout (TWO-PHASE)
-      if (immediateSendTimeoutRef.current) {
-        clearTimeout(immediateSendTimeoutRef.current);
-        immediateSendTimeoutRef.current = null;
-      }
-      // Cleanup session timer
+      window.removeEventListener("beforeunload", stopOnPageUnload);
+      // Defer one task so a Strict Mode remount can cancel this. On a real
+      // unmount the callback runs and closes the complete provider session.
+      deferredSessionStopRef.current = setTimeout(() => {
+        void session?.stop().catch(() => {
+          console.error("[SESSION] Cleanup after unmount failed");
+        });
+        deferredSessionStopRef.current = null;
+      }, 0);
       if (sessionTimerRef.current) {
         clearInterval(sessionTimerRef.current);
         sessionTimerRef.current = null;
       }
-      // Cleanup keep-alive interval
       if (keepAliveIntervalRef.current) {
         clearInterval(keepAliveIntervalRef.current);
         keepAliveIntervalRef.current = null;
       }
-      // Cleanup fade animation
-      if (fadeIntervalRef.current) {
-        clearInterval(fadeIntervalRef.current);
-        fadeIntervalRef.current = null;
-      }
-      // Clear audio buffer
-      audioBufferRef.current = [];
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const containerStyle =
     fixedHeight && isInIframe
       ? { height: `${fixedHeight}px`, overflow: "hidden" as const }
       : {};
+  const elapsedSeconds = SESSION_LIMIT_MINUTES * 60 - sessionSecondsRemaining;
+  const elapsedLabel = `${String(Math.floor(elapsedSeconds / 60)).padStart(2, "0")}:${String(elapsedSeconds % 60).padStart(2, "0")}`;
 
   return (
-    <div
-      className="flex-1 flex flex-col items-center justify-center relative safe-area-all w-full"
-      style={containerStyle}
-    >
+    <div className={styles.darkScreen} style={containerStyle}>
+      {isEnding && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/65 px-6 text-center">
+          <div className="w-full max-w-sm rounded-3xl bg-white p-6 text-slate-900 shadow-2xl">
+            <p className="text-lg font-semibold">Finalizando conversación…</p>
+            <p className="mt-2 text-sm text-slate-600">
+              Esperá un momento mientras cerramos la sesión de forma segura.
+            </p>
+            {canRetryStop && (
+              <button
+                type="button"
+                onClick={onEndCall}
+                className="mt-5 w-full rounded-full bg-blue-600 px-5 py-3 font-semibold text-white"
+              >
+                Reintentar cierre
+              </button>
+            )}
+          </div>
+        </div>
+      )}
       {/* Session expiry warning */}
       {showExpiryWarning && (
         <SessionExpiryWarning secondsRemaining={sessionSecondsRemaining} />
       )}
 
-      {/* Error display */}
-      {agentError && (
-        <div className="absolute top-4 left-4 right-4 z-50 bg-red-100 border border-red-300 text-red-700 px-4 py-3 rounded-lg text-sm">
-          {agentError}
-        </div>
-      )}
-
-      {/* Main content area */}
-      <div className="flex-1 flex items-center justify-center relative p-4 md:p-6 w-full">
-        {/* Avatar container */}
-        <div
-          className={`
-          relative h-full
-          ${
-            isDesktop
-              ? "max-w-4xl w-full aspect-video"
-              : "max-w-sm w-full aspect-[9/16] md:aspect-[3/4]"
-          }
-        `}
-        >
-          {/* Status indicator */}
-          <StatusIndicator
-            isConnected={isStreamReady && isAgentConnected}
-            isListening={isListening}
-            isThinking={isThinking}
-            isSpeaking={isSpeaking}
-            isMuted={isMuted}
-            connectionQuality={connectionQuality}
-          />
-
-          {/* Avatar video */}
-          <AvatarVideo videoRef={videoRef} isStreamReady={isStreamReady} />
-
-          {/* Controls overlay */}
-          <div className="controls-overlay rounded-b-2xl">
-            <div className="flex items-center justify-between gap-4">
-              {/* Voice control */}
-              <VoiceControls
-                isMuted={isMuted}
-                isActive={isAgentConnected}
-                onToggleMute={handleToggleMute}
-              />
-
-              {/* End call button */}
-              <Button
-                onClick={onEndCall}
-                variant="destructive"
-                size="lg"
-                className="flex items-center gap-2 flex-1 max-w-xs justify-center floating-glass glass-morphism-strong bg-red-500/95 hover:bg-red-500 border border-red-400/40 shadow-xl transition-all duration-300 text-gray-900"
-              >
-                <PhoneOff className="w-5 h-5" />
-                <span className="font-medium">Finalizar</span>
-              </Button>
-
-              {/* Spacer for symmetry */}
-              {isAgentConnected && <div className="w-11" />}
-            </div>
+      <div className={styles.callStage}>
+        <div className={styles.callHeader}>
+          <div
+            className={styles.timerPill}
+            aria-label={`Duración ${elapsedLabel}`}
+          >
+            <span className={styles.recordDot} aria-hidden="true" />
+            {elapsedLabel}
           </div>
+          <BrandMark dark className={styles.callBrand} />
+          <span aria-hidden="true" />
+        </div>
+
+        <div className={styles.videoFrame}>
+          <AvatarVideo
+            videoRef={videoRef}
+            isStreamReady={isStreamReady}
+            chromaKeyEnabled={chromaKeyEnabled}
+            chromaSettings={chromaSettings}
+          />
+        </div>
+
+        <StatusIndicator
+          isConnected={isStreamReady}
+          isListening={isUserTalking}
+          isThinking={isThinking}
+          isSpeaking={isAvatarTalking}
+          isMuted={isMuted}
+          connectionQuality={connectionQuality}
+        />
+
+        <div className={styles.controls}>
+          <VoiceControls
+            isMuted={isMuted}
+            isActive={isStreamReady}
+            onToggleMute={handleToggleMute}
+          />
+          <button
+            type="button"
+            onClick={onEndCall}
+            className={`${styles.roundControl} ${styles.endControl}`}
+            aria-label="Finalizar conversación"
+          >
+            <PhoneOff size={27} />
+          </button>
+
+          {DEBUG_UI && (
+            <div className="absolute left-4 bottom-4 flex gap-2">
+              <Button
+                onClick={handleTestAgent}
+                variant="outline"
+                size="sm"
+                className="text-xs bg-yellow-100 border-yellow-300 hover:bg-yellow-200"
+              >
+                <MessageSquare className="w-3 h-3 mr-1" />
+                Test Agent (text)
+              </Button>
+              <Button
+                onClick={() => {
+                  const vc = sessionRef.current?.voiceChat;
+                  if (!vc) return;
+                  const msg = `state=${vc.state}, muted=${vc.isMuted}`;
+                  console.log(`[DIAG] Manual check: ${msg}`);
+                  alert(`VoiceChat: ${msg}`);
+                }}
+                variant="outline"
+                size="sm"
+                className="text-xs bg-blue-100 border-blue-300 hover:bg-blue-200"
+              >
+                <Bug className="w-3 h-3 mr-1" />
+                Mic Status
+              </Button>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -1516,15 +1088,29 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({ onEndCall }) => {
 // ============================================
 // SESSION WRAPPER COMPONENT
 // ============================================
+interface ChromaSettings {
+  minHue?: number;
+  maxHue?: number;
+  minSaturation?: number;
+  edgeSharpness?: number;
+  bgUrlDesktop?: string | null;
+  bgUrlMobile?: string | null;
+}
+
 interface SessionWrapperProps {
   onSessionStopped: () => void;
+  chromaKeyEnabled: boolean;
+  chromaSettings: ChromaSettings;
 }
 
 const SessionWrapper: React.FC<SessionWrapperProps> = ({
   onSessionStopped,
+  chromaKeyEnabled,
+  chromaSettings,
 }) => {
   const { widgetState, sessionState } = useLiveAvatarContext();
   const { startSession, stopSession } = useSession();
+  const [canRetryStop, setCanRetryStop] = useState(false);
 
   // Start session automatically
   useEffect(() => {
@@ -1540,8 +1126,24 @@ const SessionWrapper: React.FC<SessionWrapperProps> = ({
     }
   }, [sessionState, onSessionStopped]);
 
+  useEffect(() => {
+    if (sessionState !== SessionState.DISCONNECTING) {
+      setCanRetryStop(false);
+      return;
+    }
+
+    const retryTimer = setTimeout(() => setCanRetryStop(true), 5000);
+    return () => clearTimeout(retryTimer);
+  }, [sessionState]);
+
   const handleEndCall = useCallback(() => {
-    stopSession();
+    setCanRetryStop(false);
+    void stopSession().catch(() => {
+      setCanRetryStop(true);
+      toast.error("No pudimos confirmar el cierre", {
+        description: "Reintentá para asegurar que la sesión quede finalizada.",
+      });
+    });
   }, [stopSession]);
 
   // Render based on widget state
@@ -1549,11 +1151,284 @@ const SessionWrapper: React.FC<SessionWrapperProps> = ({
     return <ConnectingScreen />;
   }
 
-  if (widgetState === WidgetState.CONNECTED) {
-    return <ConnectedSession onEndCall={handleEndCall} />;
+  if (
+    widgetState === WidgetState.CONNECTED ||
+    sessionState === SessionState.DISCONNECTING
+  ) {
+    return (
+      <ConnectedSession
+        onEndCall={handleEndCall}
+        isEnding={sessionState === SessionState.DISCONNECTING}
+        canRetryStop={canRetryStop}
+        chromaKeyEnabled={chromaKeyEnabled}
+        chromaSettings={chromaSettings}
+      />
+    );
   }
 
   return <ConnectingScreen />;
+};
+
+type RecapView = "preparing" | "summary" | "routine";
+
+function formatCatalogPrice(product: ClaraCatalogProduct): string | null {
+  if (!product.price) return null;
+  const amount = Number(product.price.amount);
+  if (!Number.isFinite(amount)) return null;
+  return new Intl.NumberFormat("es-AR", {
+    style: "currency",
+    currency: product.price.currencyCode,
+    maximumFractionDigits: amount % 1 === 0 ? 0 : 2,
+  }).format(amount);
+}
+
+const RoutineProductCard: React.FC<{ product: ClaraCatalogProduct }> = ({
+  product,
+}) => {
+  if (!product.url) return null;
+  const price = formatCatalogPrice(product);
+  const compareAtPrice = product.compareAtPrice
+    ? formatCatalogPrice({ ...product, price: product.compareAtPrice })
+    : null;
+
+  return (
+    <a
+      className={styles.productCard}
+      href={product.url}
+      target="_blank"
+      rel="noreferrer"
+      aria-label={`Ver ${product.title} en la tienda`}
+    >
+      <div className={styles.productImageWrap}>
+        {product.imageUrl ? (
+          // Shopify CDN URL is validated server-side with the canonical product.
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            className={styles.productImage}
+            src={product.imageUrl}
+            alt={product.imageAlt || product.title}
+            loading="lazy"
+          />
+        ) : (
+          <span className={styles.productImageFallback} aria-hidden="true">
+            BETA
+          </span>
+        )}
+      </div>
+      <div className={styles.productDetails}>
+        <span className={styles.productName}>{product.title}</span>
+        {(price || compareAtPrice) && (
+          <span className={styles.productPrices}>
+            {price && <strong>{price}</strong>}
+            {compareAtPrice && <del>{compareAtPrice}</del>}
+            {compareAtPrice && <em>Oferta</em>}
+          </span>
+        )}
+        <span className={styles.productLink}>Ver producto</span>
+      </div>
+    </a>
+  );
+};
+
+interface SessionRecapProps {
+  savedRoutine?: ClaraRoutine;
+  savedConsultationDate?: string | null;
+  onViewSavedRoutine?: () => void;
+  view: RecapView;
+  durationSeconds: number;
+  customerData?: CustomerData | null;
+  result?: ClaraConsultationResult | null;
+  processingError?: string | null;
+  onViewChange: (view: RecapView) => void;
+  onTalkAgain: () => void;
+}
+
+export const SessionRecap: React.FC<SessionRecapProps> = ({
+  savedRoutine,
+  savedConsultationDate,
+  onViewSavedRoutine,
+  view,
+  durationSeconds,
+  customerData,
+  result = null,
+  processingError = null,
+  onViewChange,
+  onTalkAgain,
+}) => {
+  const minutes = Math.max(1, Math.round(durationSeconds / 60));
+  const product = customerData?.lastOrderProduct;
+  const hasRoutine = Boolean(result?.routine?.steps.length);
+
+  if (view === "preparing") {
+    return (
+      <div className={styles.lightScreen} role="status" aria-live="polite">
+        <div className={styles.centerContent}>
+          <div className={styles.preparingDot} />
+          <p className={`${styles.connectingLabel} ${styles.display}`}>
+            {processingError || "Preparando tu resumen…"}
+          </p>
+          {processingError && (
+            <button
+              type="button"
+              className={styles.secondaryButton}
+              onClick={onTalkAgain}
+            >
+              Volver al inicio
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (view === "routine") {
+    const routine = savedRoutine || result?.routine;
+    return (
+      <div className={styles.recapScreen}>
+        <div className={styles.recapInner}>
+          <button
+            type="button"
+            className={styles.backButton}
+            onClick={() => onViewChange("summary")}
+            aria-label={savedRoutine ? "Volver" : "Volver al resumen"}
+          >
+            <ChevronLeft size={20} />
+          </button>
+          <BrandMark className={styles.topBrand} />
+          <h1
+            className={`${styles.recapTitle} ${styles.display}`}
+            style={{ marginTop: 28 }}
+          >
+            {savedRoutine ? "Mi rutina guardada" : "Mi rutina"}
+          </h1>
+          <p className={styles.recapMeta}>
+            {savedRoutine
+              ? savedConsultationDate
+                ? `Rutina de la consulta del ${new Intl.DateTimeFormat("es-AR", { timeZone: "America/Argentina/Buenos_Aires", dateStyle: "long" }).format(new Date(savedConsultationDate))}`
+                : "Tu última rutina guardada"
+              : "Próximos pasos para tu consulta"}
+          </p>
+          {savedRoutine && (
+            <p className={styles.recapMeta}>
+              Precio y disponibilidad: ver producto.
+            </p>
+          )}
+          <div className={styles.recapCard}>
+            <div className={styles.eyebrow}>Objetivos conversados</div>
+            <p className={styles.recapText}>{routineGoalsText(routine)}</p>
+          </div>
+          {routine?.steps.map((step, index) => (
+            <div
+              className={styles.recapCard}
+              key={`${step.moment}-${step.order}-${index}`}
+            >
+              <div className={styles.eyebrow}>
+                {step.moment === "morning"
+                  ? "Mañana"
+                  : step.moment === "evening"
+                    ? "Noche"
+                    : step.moment === "morning_evening"
+                      ? "Mañana y noche"
+                      : "Semanal"}{" "}
+                · Paso {step.order}
+              </div>
+              <p className={styles.recapText}>{step.instruction}</p>
+              {step.frequency && (
+                <p className={styles.recapMeta}>{step.frequency}</p>
+              )}
+              {step.product?.url && (
+                <RoutineProductCard product={step.product} />
+              )}
+            </div>
+          ))}
+          {routine?.cautions.map((caution) => (
+            <div className={styles.recapCard} key={caution}>
+              <div className={styles.eyebrow}>A tener en cuenta</div>
+              <p className={styles.recapText}>{caution}</p>
+            </div>
+          ))}
+          <div className={styles.recapActions}>
+            <button
+              type="button"
+              className={styles.primaryButton}
+              onClick={onTalkAgain}
+            >
+              Volver a hablar con Clara
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={styles.recapScreen}>
+      <div className={styles.recapInner}>
+        <h1 className={`${styles.recapTitle} ${styles.display}`}>
+          Tu conversación con Clara
+        </h1>
+        <p className={styles.recapMeta}>Hoy · {minutes} min</p>
+        <div className={styles.recapCard}>
+          <div className={styles.eyebrow}>Resumen de tu consulta</div>
+          <p className={styles.recapText}>
+            {result?.summary ||
+              "La consulta terminó, pero el resumen todavía no está disponible."}
+          </p>
+        </div>
+        {product && (
+          <div className={styles.recapCard}>
+            <div className={styles.eyebrow}>Producto en contexto</div>
+            <p className={`${styles.recapText} ${styles.display}`}>{product}</p>
+          </div>
+        )}
+        {!hasRoutine && (
+          <div className={styles.recapCard} role="status">
+            <div className={styles.eyebrow}>Rutina de esta consulta</div>
+            <p className={styles.recapText}>
+              Esta consulta no tiene una nueva rutina guardada. Si ya guardaste
+              una anteriormente, podés consultarla en «Mi rutina guardada».
+            </p>
+          </div>
+        )}
+        <div className={styles.recapActions}>
+          <button
+            type="button"
+            className={styles.primaryButton}
+            onClick={() =>
+              hasRoutine ? onViewChange("routine") : onTalkAgain()
+            }
+          >
+            {hasRoutine ? "Ver próximos pasos" : "Hablar nuevamente con Clara"}
+          </button>
+          {onViewSavedRoutine && (
+            <button
+              type="button"
+              className={styles.secondaryButton}
+              onClick={onViewSavedRoutine}
+            >
+              Mi rutina guardada
+            </button>
+          )}
+          <a
+            className={styles.secondaryButton}
+            href="https://betaskintech.com"
+            rel="noreferrer"
+          >
+            Volver a la tienda
+          </a>
+          {hasRoutine && (
+            <button
+              type="button"
+              className={styles.textButton}
+              onClick={onTalkAgain}
+            >
+              Hablar otra vez con Clara
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 };
 
 // ============================================
@@ -1562,17 +1437,74 @@ const SessionWrapper: React.FC<SessionWrapperProps> = ({
 export interface ClaraVoiceAgentProps {
   userName?: string | null;
   customerData?: CustomerData | null;
+  designPreview?: string | null;
 }
+
+type ConsultationCredentials = {
+  id: string;
+  accessToken: string;
+};
+
+const designPreviewResult: ClaraConsultationResult = {
+  consultationId: "preview",
+  status: "completed",
+  summary:
+    "Conversaron sobre hidratación, sensibilidad y cómo incorporar los productos de forma gradual.",
+  transcript: [],
+  routine: {
+    concerns: ["Hidratación", "Sensibilidad"],
+    cautions: ["Introducí un producto nuevo por vez y usá protector solar."],
+    steps: [
+      {
+        moment: "morning",
+        order: 1,
+        instruction:
+          "Aplicá la rutina indicada por Clara sobre la piel limpia.",
+        frequency: "Todos los días",
+        product: null,
+      },
+    ],
+  },
+};
 
 export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
   userName = null,
   customerData = null,
+  designPreview = null,
 }) => {
+  const [showSavedRoutine, setShowSavedRoutine] = useState(false);
   const [sessionToken, setSessionToken] = useState<string | null>(null);
+  const [chromaKeyEnabled, setChromaKeyEnabled] = useState(false);
+  const [chromaSettings, setChromaSettings] = useState<{
+    minHue?: number;
+    maxHue?: number;
+    minSaturation?: number;
+    edgeSharpness?: number;
+    bgUrlDesktop?: string | null;
+    bgUrlMobile?: string | null;
+  }>({});
   const [isStarting, setIsStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [recapView, setRecapView] = useState<RecapView | null>(null);
+  const [completedSessionSeconds, setCompletedSessionSeconds] = useState(0);
+  const [consultationCredentials, setConsultationCredentials] =
+    useState<ConsultationCredentials | null>(null);
+  const [consultationResult, setConsultationResult] =
+    useState<ClaraConsultationResult | null>(null);
+  const [consultationProcessingError, setConsultationProcessingError] =
+    useState<string | null>(null);
+  const [conversationMemory, setConversationMemory] =
+    useState<ClaraConversationMemory>([]);
+  const sessionStartedAtRef = useRef<number | null>(null);
   const { fixedHeight, isInIframe } = useFixedHeight();
   const { isDesktop } = useScreenSize();
+  const activeCustomerData = useMemo<CustomerData | null>(
+    () =>
+      customerData || conversationMemory.length
+        ? { ...(customerData || {}), conversationMemory }
+        : null,
+    [customerData, conversationMemory],
+  );
 
   // Rate limit state
   const [isRateLimited, setIsRateLimited] = useState(false);
@@ -1619,9 +1551,10 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
   const handleStartCall = useCallback(async () => {
     setIsStarting(true);
     setError(null);
+    setConversationMemory([]);
 
     try {
-      // Use CUSTOM mode for Voice Agent (we handle STT/LLM/TTS via ElevenLabs)
+      // Use LITE mode with ElevenLabs Plugin (HeyGen handles STT/LLM/TTS server-side)
       const res = await fetch("/api/start-custom-session", {
         method: "POST",
         headers: {
@@ -1635,25 +1568,67 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
       if (!res.ok) {
         const errorData = await res.json();
 
-        // Handle rate limit (429) specifically
-        if (res.status === 429) {
+        // Buyer-specific start quota and active-session lock.
+        if (res.status === 429 || res.status === 409) {
           const retryAfter = errorData.retryAfter || 60;
           setRateLimitCountdown(retryAfter);
 
-          // Show toast notification
-          toast.error("Límite de sesiones alcanzado", {
-            description: `Has iniciado muchas sesiones recientemente. Por favor espera ${retryAfter} segundos antes de intentar nuevamente.`,
-            duration: 5000,
-          });
+          toast.error(
+            res.status === 409
+              ? "Ya hay una conversación activa"
+              : "Límite de conversaciones alcanzado",
+            {
+              description:
+                res.status === 409
+                  ? "Finalizá la conversación abierta o esperá unos minutos para volver a intentar."
+                  : `Podés iniciar hasta tres conversaciones por hora. Volvé a intentar en ${Math.ceil(retryAfter / 60)} min.`,
+              duration: 5000,
+            },
+          );
 
           return; // Exit early, don't throw error
+        }
+
+        if (res.status === 503) {
+          toast.error("Acceso temporalmente no disponible", {
+            description:
+              "No iniciamos una sesión paga porque no pudimos validar el límite. Probá nuevamente en unos segundos.",
+          });
+          return;
         }
 
         throw new Error(errorData.error || "Failed to start session");
       }
 
-      const { session_token } = await res.json();
+      const {
+        session_token,
+        chroma_key_enabled,
+        chroma_config,
+        consultation_id,
+        consultation_access_token,
+        consultation_persistence_available,
+        conversation_memory,
+      } = await res.json();
+      sessionStartedAtRef.current = Date.now();
+      setRecapView(null);
+      setConsultationResult(null);
+      setConsultationProcessingError(null);
+      setConsultationCredentials(
+        consultation_persistence_available !== false &&
+          consultation_id &&
+          consultation_access_token
+          ? {
+              id: consultation_id,
+              accessToken: consultation_access_token,
+            }
+          : null,
+      );
+      setConversationMemory(
+        Array.isArray(conversation_memory) ? conversation_memory : [],
+      );
       setSessionToken(session_token);
+      setChromaKeyEnabled(chroma_key_enabled === true);
+      if (chroma_config) setChromaSettings(chroma_config);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -1662,7 +1637,92 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
   }, [isDesktop]);
 
   const handleSessionStopped = useCallback(() => {
+    const startedAt = sessionStartedAtRef.current;
+    setCompletedSessionSeconds(
+      startedAt ? Math.max(1, Math.round((Date.now() - startedAt) / 1000)) : 0,
+    );
+    sessionStartedAtRef.current = null;
     setSessionToken(null);
+    setRecapView("preparing");
+    if (consultationCredentials) {
+      void releaseConsultation(
+        consultationCredentials.id,
+        consultationCredentials.accessToken,
+      ).then((released) => {
+        if (!released)
+          toast.error(
+            "No pudimos confirmar el cierre. Revisá tu conexión antes de volver a intentar.",
+          );
+      });
+    }
+  }, [consultationCredentials]);
+
+  useEffect(() => {
+    if (recapView !== "preparing") return;
+    if (!consultationCredentials) {
+      setConsultationProcessingError(
+        "No pudimos preparar el resumen de esta conversación.",
+      );
+      return;
+    }
+
+    let cancelled = false;
+    let attempts = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const pollResult = async () => {
+      attempts += 1;
+      try {
+        const response = await fetch(
+          `/api/consultations/${encodeURIComponent(consultationCredentials.id)}`,
+          {
+            headers: {
+              "x-consultation-token": consultationCredentials.accessToken,
+            },
+            cache: "no-store",
+          },
+        );
+        if (response.ok) {
+          const result = (await response.json()) as ClaraConsultationResult;
+          if (!cancelled && result.summary) {
+            setConsultationResult(result);
+            setRecapView("summary");
+            return;
+          }
+          if (!cancelled && result.status === "failed") {
+            setConsultationProcessingError(
+              "No pudimos procesar el resumen de esta conversación.",
+            );
+            return;
+          }
+        }
+      } catch {
+        // ElevenLabs analysis is asynchronous; transient failures are retried.
+      }
+
+      if (cancelled) return;
+      if (attempts >= 30) {
+        setConsultationProcessingError(
+          "La conversación terminó correctamente. El resumen sigue procesándose y aparecerá cuando esté listo.",
+        );
+        return;
+      }
+      timer = setTimeout(pollResult, 1000);
+    };
+
+    void pollResult();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [recapView, consultationCredentials]);
+
+  const handleTalkAgain = useCallback(() => {
+    setRecapView(null);
+    setError(null);
+    setConsultationCredentials(null);
+    setConsultationResult(null);
+    setConsultationProcessingError(null);
   }, []);
 
   const containerStyle =
@@ -1670,11 +1730,93 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
       ? { height: `${fixedHeight}px`, overflow: "hidden" as const }
       : {};
 
+  if (process.env.NODE_ENV !== "production" && designPreview) {
+    if (designPreview === "welcome") {
+      return (
+        <div className={styles.shell}>
+          <LandingScreen
+            onStartCall={async () => {}}
+            isLoading={false}
+            userName={userName}
+            customerData={customerData}
+          />
+        </div>
+      );
+    }
+    if (designPreview === "connecting") {
+      return (
+        <div className={styles.shell}>
+          <ConnectingScreen />
+        </div>
+      );
+    }
+    if (
+      designPreview === "preparing" ||
+      designPreview === "summary" ||
+      designPreview === "routine"
+    ) {
+      return (
+        <div className={styles.shell}>
+          <SessionRecap
+            view={designPreview}
+            durationSeconds={364}
+            customerData={customerData}
+            result={designPreviewResult}
+            onViewChange={() => {}}
+            onTalkAgain={() => {}}
+          />
+        </div>
+      );
+    }
+    if (designPreview === "call") {
+      return (
+        <div className={`${styles.shell} ${styles.darkScreen}`}>
+          <div className={styles.callStage}>
+            <div className={styles.callHeader}>
+              <div className={styles.timerPill}>
+                <span className={styles.recordDot} />
+                02:14
+              </div>
+              <BrandMark dark className={styles.callBrand} />
+              <span />
+            </div>
+            <div className={styles.videoFrame}>
+              <div aria-label="El video en vivo de Clara ocupa este espacio" />
+            </div>
+            <div className={styles.statusWrap}>
+              <div className={styles.statusPill}>
+                <span className={styles.voiceBars}>
+                  <span />
+                  <span />
+                  <span />
+                </span>
+                Hablando
+              </div>
+            </div>
+            <div className={styles.controls}>
+              <button
+                type="button"
+                className={`${styles.roundControl} ${styles.muteControl}`}
+                aria-label="Silenciar micrófono"
+              >
+                <Mic size={27} />
+              </button>
+              <button
+                type="button"
+                className={`${styles.roundControl} ${styles.endControl}`}
+                aria-label="Finalizar conversación"
+              >
+                <PhoneOff size={27} />
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+  }
+
   return (
-    <div
-      className="w-full h-full min-h-screen flex flex-col items-center justify-center bg-slate-50"
-      style={containerStyle}
-    >
+    <div className={styles.shell} style={containerStyle}>
       {error && (
         <div className="absolute top-4 left-4 right-4 z-50 bg-red-100 border border-red-300 text-red-700 px-4 py-3 rounded-lg">
           <p className="text-sm">{error}</p>
@@ -1687,7 +1829,38 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
         </div>
       )}
 
-      {!sessionToken ? (
+      {/* MobileLogger: hidden unless DEBUG_UI=true */}
+      {DEBUG_UI && <MobileLogger filter="" />}
+
+      {showSavedRoutine ? (
+        <SavedRoutinePanel
+          onBack={() => setShowSavedRoutine(false)}
+          renderRoutine={(saved) => (
+            <SessionRecap
+              view="routine"
+              durationSeconds={0}
+              savedRoutine={saved.routine!}
+              savedConsultationDate={saved.consultationDate}
+              onViewChange={() => setShowSavedRoutine(false)}
+              onTalkAgain={() => {
+                setShowSavedRoutine(false);
+                handleTalkAgain();
+              }}
+            />
+          )}
+        />
+      ) : recapView ? (
+        <SessionRecap
+          view={recapView}
+          durationSeconds={completedSessionSeconds}
+          customerData={customerData}
+          result={consultationResult}
+          processingError={consultationProcessingError}
+          onViewChange={setRecapView}
+          onTalkAgain={handleTalkAgain}
+          onViewSavedRoutine={() => setShowSavedRoutine(true)}
+        />
+      ) : !sessionToken ? (
         <LandingScreen
           onStartCall={handleStartCall}
           isLoading={isStarting}
@@ -1695,14 +1868,19 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
           customerData={customerData}
           isRateLimited={isRateLimited}
           rateLimitCountdown={rateLimitCountdown}
+          onViewSavedRoutine={() => setShowSavedRoutine(true)}
         />
       ) : (
         <LiveAvatarContextProvider
           sessionAccessToken={sessionToken}
           userName={userName}
-          customerData={customerData}
+          customerData={activeCustomerData}
         >
-          <SessionWrapper onSessionStopped={handleSessionStopped} />
+          <SessionWrapper
+            onSessionStopped={handleSessionStopped}
+            chromaKeyEnabled={chromaKeyEnabled}
+            chromaSettings={chromaSettings}
+          />
         </LiveAvatarContextProvider>
       )}
     </div>

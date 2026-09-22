@@ -9,7 +9,20 @@ import {
 } from "@/src/shopify";
 import { logger } from "@/src/lib/logger/secure-logger";
 
+function identifierSuffix(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value.slice(-6) : null;
+}
+
 export async function POST(request: Request) {
+  // This legacy direct-ElevenLabs path exists only for QA. Production uses the
+  // purchase-gated LiveAvatar LITE connector endpoint.
+  if (process.env.VERCEL_ENV === "production") {
+    return new Response(JSON.stringify({ error: "Not found" }), {
+      status: 404,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
   // === RATE LIMIT CHECK ===
   const limitResult = await rateLimitByEndpoint(
     request as NextRequest,
@@ -39,15 +52,12 @@ export async function POST(request: Request) {
   }
 
   // === PARSE REQUEST BODY ===
-  let agentId = ELEVENLABS_AGENT_ID;
+  const agentId = ELEVENLABS_AGENT_ID;
   let shopifyCustomerId: string | undefined;
   let shopifyToken: string | undefined;
 
   try {
     const body = await request.json();
-    if (body.agentId) {
-      agentId = body.agentId;
-    }
     // Optional Shopify credentials for iframe users
     shopifyCustomerId = body.customer_id;
     shopifyToken = body.shopify_token;
@@ -72,13 +82,13 @@ export async function POST(request: Request) {
       isShopifyUser = true;
       logger.info(
         "Valid Shopify HMAC",
-        { customerId: cleanId },
+        { authenticatedBy: "shopify_hmac" },
         { route: "/api/elevenlabs-conversation" },
       );
     } else {
       logger.warn(
         "Invalid Shopify HMAC attempt",
-        { customerId: cleanId },
+        { customerIdPresent: Boolean(cleanId) },
         { route: "/api/elevenlabs-conversation" },
       );
     }
@@ -147,7 +157,7 @@ export async function POST(request: Request) {
   logger.info(
     "[ELEVENLABS] Requesting signed URL",
     {
-      agentId,
+      agentIdSuffix: identifierSuffix(agentId),
       hasApiKey: !!ELEVENLABS_API_KEY,
     },
     { route: "/api/elevenlabs-conversation" },
@@ -228,10 +238,11 @@ export async function POST(request: Request) {
         {
           status: res.status,
           statusText: res.statusText,
-          errorMessage,
           errorCode,
-          agentId,
-          errorDetails,
+          agentIdSuffix: identifierSuffix(agentId),
+          errorDetailType: Array.isArray(errorDetails)
+            ? "array"
+            : typeof errorDetails,
         },
         { route: "/api/elevenlabs-conversation" },
       );
@@ -252,7 +263,10 @@ export async function POST(request: Request) {
     const data = await res.json();
     logger.info(
       "[ELEVENLABS] Signed URL obtained successfully",
-      { agentId, hasSignedUrl: !!data.signed_url },
+      {
+        agentIdSuffix: identifierSuffix(agentId),
+        hasSignedUrl: !!data.signed_url,
+      },
       { route: "/api/elevenlabs-conversation" },
     );
 

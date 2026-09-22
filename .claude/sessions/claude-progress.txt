@@ -1,5 +1,65 @@
 # Clara Voice Agent - Session Progress
 
+## 2026-05-14: ElevenLabs Plugin Migration + Chroma Key Feature
+
+### Branch: `feature/elevenlabs-plugin`
+### PR: #15 (pending merge)
+
+### Part 1 — ElevenLabs Plugin Migration (completed, in PR #15)
+
+Replaced ~500 lines of manual audio piping (Mic→WebAudio→ElevenLabs WS→buffer→resample→HeyGen)
+with HeyGen's native ElevenLabs Plugin (Mic→LiveKit→HeyGen server→ElevenLabs→lip-sync).
+
+**Key changes:**
+- SDK updated v0.0.9 → v0.0.18 (ElevenLabsAgentSession class)
+- Session mode: CUSTOM → LITE + `elevenlabs_agent_config`
+- HeyGen Secrets API: stored ElevenLabs API key, got `secret_id`
+- ClaraVoiceAgent: ~1756 lines → ~801 lines (net -950 lines removed)
+- Customer context via `session.sendContextualUpdate()` (no escape hatch)
+- All audio refs, hooks, constants, functions removed
+- New: `src/utils/heygen/elevenlabs-commands.ts` (contextual_update helper)
+
+**Commits:** 59c1011 → 92ce46e (7 commits)
+
+**ElevenLabs dashboard requirement:**
+- Agent output (TTS): `pcm_24000` (REQUIRED for HeyGen lip-sync)
+- User input (STT): `pcm_16000`
+
+### Part 2 — Chroma Key / Green Screen Feature (uncommitted)
+
+Added configurable green screen removal via Canvas 2D chroma keying.
+Controlled by `CHROMA_KEY_ENABLED` env var (set per-environment in Vercel).
+
+**New files:**
+- `src/hooks/useChromaKey.ts` — HSV-based chroma key hook (matches HeyGen official bg-removal-demo)
+
+**Modified files:**
+- `app/api/secrets.ts` — `CHROMA_KEY_ENABLED`, `*_GREENSCREEN` avatar ID selection
+- `app/api/start-custom-session/route.ts` — passes `chroma_key_enabled` to frontend
+- `src/components/ClaraVoiceAgent.tsx` — AvatarVideo with 3-layer DOM stack (bg/video/canvas)
+- `src/hooks/index.ts` — exports useChromaKey
+- `turbo.json` — new env vars in globalEnv
+
+**How it works:**
+- `CHROMA_KEY_ENABLED=false` (default): normal avatar with background, plain <video>
+- `CHROMA_KEY_ENABLED=true`: green screen avatar + canvas chroma key processing
+- Algorithm: RGB→HSV conversion, hue range 60°-180°, greenness soft-edge formula
+- DOM: bg-layer(z-0) → video(z-10, visibility:hidden) → canvas(z-20)
+- video uses `visibility:hidden` (NOT opacity:0) to keep decoder active
+
+**Vercel env vars (Preview only):**
+- `CHROMA_KEY_ENABLED=true`
+- `HEYGEN_AVATAR_ID_DESKTOP_GREENSCREEN=<avatar-id>`
+- `HEYGEN_AVATAR_ID_MOBILE_GREENSCREEN=<avatar-id>`
+
+### Pending
+- [ ] Commit + push chroma key changes
+- [ ] Add env vars in Vercel Preview scope
+- [ ] Test chroma key on testers.betaskintech.com
+- [ ] Merge PR #15 after QA approval
+- [ ] Future: add background image/video picker (bg-layer z-0 is ready)
+
+
 ## 2024-12-31: Branch Consolidation + Claude Code Setup
 
 ### Branch Consolidation
@@ -56,3 +116,36 @@ Created `.claude/` structure:
 1. **Micro-pausa entre chunks**: ~150-300ms gap when Smart Chunking activates
 2. **Mobile latency**: May be higher on slow networks
 3. **Safari iOS**: Not supported (SafariFallbackScreen shows message)
+
+
+## 2026-06-04: Limpieza de PRs + actualizacion de contexto
+
+### Hecho
+- Mergeados (por el usuario) PR #18 (Prisma 7->6) y PR #19 (Shopify purchase-greeting).
+- Descartado cambio half-duplex sin commitear (mata el barge-in -> rechazado).
+- Borradas 9 ramas locales mergeadas. Quedan: develop, master, y 5 con trabajo sin mergear
+  (docs/pr-workflow-protection #12, claude/integrate-openai #4, hotfix/security-hardening-apr-2026,
+  claude/streaming-api-fix, fix/audio-first-words, feature/elevenlabs-plugin).
+- Reescrito CLAUDE.md (arquitectura plugin ElevenLabs, fixes, mejores practicas, uso de skills).
+- Reescritos feature_list.json y blockers.json con estado real verificado.
+- Creado docs/QA_CHECKLIST.md.
+
+### Estado verificado
+- pnpm typecheck: PASS. pnpm test: 55/55 PASS. Working tree limpio en develop.
+- develop esta ~47 commits delante de master. PR #14 = promocion a prod (pendiente QA).
+
+### PRs abiertos
+- #14 develop->master (promocion a prod; testear preview primero).
+- #12 docs/husky (STALE 56 commits; rebase o cherry-pick .husky/* y cerrar).
+- #4 OpenAI voice (draft, conflicting; candidato a cerrar).
+
+### Brainstorm pausado
+- Telemetria de sesiones (logs+dispositivo por usuario, digerible por IA) + base circuit-breaker.
+  Decidido: flujo A (revision por sesion) + senales tecnicas duras para auto-apagado.
+  Falta: elegir backend de storage + diseno PII.
+
+### Proximos pasos
+1. QA en preview (docs/QA_CHECKLIST.md), incluyendo verificar escritura en DB.
+2. Terminar diseno de telemetria y construirla (clave para el bug 'habla sola').
+3. Mergear PR #14 a prod cuando QA de verde.
+4. Cerrar/rebasar PR #12 y #4.

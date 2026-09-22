@@ -1,5 +1,18 @@
 import { VoiceChatConfig } from "../VoiceChat";
 
+export enum SessionMode {
+  FULL = "FULL",
+  LITE = "LITE",
+}
+
+export enum AgentType {
+  FULL = "FULL",
+  OPENAI_REALTIME = "OPENAI_REALTIME",
+  ELEVENLABS_AGENT = "ELEVENLABS_AGENT",
+  GEMINI_REALTIME = "GEMINI_REALTIME",
+  UNKNOWN = "UNKNOWN",
+}
+
 export enum SessionState {
   INACTIVE = "INACTIVE",
   CONNECTING = "CONNECTING",
@@ -12,22 +25,65 @@ export enum SessionDisconnectReason {
   UNKNOWN_REASON = "UNKNOWN_REASON",
   CLIENT_INITIATED = "CLIENT_INITIATED",
   SESSION_START_FAILED = "SESSION_START_FAILED",
-  // Consider adding other reasons: INACTIVITY_TIMEOUT, SESSION_DURATION_EXCEEDED, OUT_OF_CREDITS, etc.
+  SERVER_INITIATED = "SERVER_INITIATED",
 }
+
+/**
+ * Opt-in, payload-free lifecycle signals for diagnosing session startup.
+ * These signals describe transport activity only. They deliberately exclude
+ * tokens, identifiers, transcript text, command payloads, and error details.
+ */
+export enum SessionDiagnosticEvent {
+  ROOM_CONNECTED = "room_connected",
+  AGENT_CONTROL_PUBLISH_ATTEMPTED = "agent_control_publish_attempted",
+  AGENT_CONTROL_PUBLISH_SETTLED = "agent_control_publish_settled",
+  AGENT_CONTROL_PUBLISH_REJECTED = "agent_control_publish_rejected",
+  ELEVENLABS_AGENT_EVENT_RECEIVED = "elevenlabs_agent_event_received",
+  AVATAR_SPEAK_STARTED = "avatar_speak_started",
+  AVATAR_SPEAK_ENDED = "avatar_speak_ended",
+  SESSION_STOPPED = "session_stopped",
+  ROOM_DISCONNECTED = "room_disconnected",
+  SESSION_ENDED = "session_ended",
+}
+
+export enum AgentControlCommandKind {
+  CONTEXTUAL_UPDATE = "contextual_update",
+  USER_MESSAGE = "user_message",
+  OTHER = "other",
+}
+
+export enum ElevenLabsAgentResponseKind {
+  CONVERSATION_INITIATION_METADATA = "conversation_initiation_metadata",
+  CONTEXTUAL_UPDATE = "contextual_update",
+  AGENT_RESPONSE = "agent_response",
+  OTHER = "other",
+}
+
+export type SessionDiagnosticEntry = {
+  event: SessionDiagnosticEvent;
+  elapsedMs: number;
+  commandKind?: AgentControlCommandKind;
+  elevenLabsResponseKind?: ElevenLabsAgentResponseKind;
+};
 
 export interface SessionConfig {
   voiceChat?: VoiceChatConfig | boolean;
   apiUrl?: string;
+  /**
+   * Optional passive observer. Exceptions from this callback are ignored so
+   * diagnostics can never affect a live session.
+   */
+  onDiagnosticEvent?: (entry: SessionDiagnosticEntry) => void;
 }
 
 export interface SessionInfo {
   session_id: string;
   max_session_duration: number | null;
   // For FULL mode will always be present
-  // For CUSTOM mode, may be null
+  // For LITE mode, may be null
   livekit_url?: string;
   livekit_client_token?: string;
-  // For CUSTOM mode with WebSocket support
+  // For LITE mode with WebSocket support
   ws_url?: string;
 }
 

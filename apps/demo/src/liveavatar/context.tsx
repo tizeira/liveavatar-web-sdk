@@ -8,7 +8,7 @@ import {
 } from "react";
 import {
   ConnectionQuality,
-  LiveAvatarSession,
+  ElevenLabsAgentSession,
   SessionState,
   SessionEvent,
   VoiceChatEvent,
@@ -17,9 +17,14 @@ import {
 } from "@heygen/liveavatar-web-sdk";
 import { LiveAvatarSessionMessage, CustomerData, WidgetState } from "./types";
 import { API_URL } from "../../app/api/secrets";
+import {
+  ClaraStartupDiagnostics,
+  logClaraStartupDiagnostic,
+  shouldEnableClaraStartupDiagnostics,
+} from "./startup-diagnostics";
 
 type LiveAvatarContextProps = {
-  sessionRef: React.RefObject<LiveAvatarSession>;
+  sessionRef: React.RefObject<ElevenLabsAgentSession>;
 
   isMuted: boolean;
   voiceChatState: VoiceChatState;
@@ -42,7 +47,7 @@ type LiveAvatarContextProps = {
 export const LiveAvatarContext = createContext<LiveAvatarContextProps>({
   sessionRef: {
     current: null,
-  } as unknown as React.RefObject<LiveAvatarSession>,
+  } as unknown as React.RefObject<ElevenLabsAgentSession>,
   connectionQuality: ConnectionQuality.UNKNOWN,
   isMuted: true,
   voiceChatState: VoiceChatState.INACTIVE,
@@ -63,7 +68,9 @@ type LiveAvatarContextProviderProps = {
   customerData?: CustomerData | null;
 };
 
-const useSessionState = (sessionRef: React.RefObject<LiveAvatarSession>) => {
+const useSessionState = (
+  sessionRef: React.RefObject<ElevenLabsAgentSession>,
+) => {
   const [sessionState, setSessionState] = useState<SessionState>(
     sessionRef.current?.state || SessionState.INACTIVE,
   );
@@ -109,7 +116,9 @@ const useSessionState = (sessionRef: React.RefObject<LiveAvatarSession>) => {
   return { sessionState, isStreamReady, connectionQuality };
 };
 
-const useVoiceChatState = (sessionRef: React.RefObject<LiveAvatarSession>) => {
+const useVoiceChatState = (
+  sessionRef: React.RefObject<ElevenLabsAgentSession>,
+) => {
   const [isMuted, setIsMuted] = useState(true);
   const [voiceChatState, setVoiceChatState] = useState<VoiceChatState>(
     sessionRef.current?.voiceChat.state || VoiceChatState.INACTIVE,
@@ -138,7 +147,9 @@ const useVoiceChatState = (sessionRef: React.RefObject<LiveAvatarSession>) => {
   return { isMuted, voiceChatState };
 };
 
-const useTalkingState = (sessionRef: React.RefObject<LiveAvatarSession>) => {
+const useTalkingState = (
+  sessionRef: React.RefObject<ElevenLabsAgentSession>,
+) => {
   const [isUserTalking, setIsUserTalking] = useState(false);
   const [isAvatarTalking, setIsAvatarTalking] = useState(false);
 
@@ -199,14 +210,52 @@ export const LiveAvatarContextProvider = ({
   userName = null,
   customerData = null,
 }: LiveAvatarContextProviderProps) => {
-  // Default voice chat on
-  const config = {
-    voiceChat: true,
-    apiUrl: API_URL,
-  };
-  const sessionRef = useRef<LiveAvatarSession>(
-    new LiveAvatarSession(sessionAccessToken, config),
+  // Keep construction side-effect free during render. The diagnostic callback is
+  // registered before a child can call session.start(), but starts no timers
+  // until the SDK reports a real LiveKit connection.
+  const sessionRef = useRef<ElevenLabsAgentSession>(null!);
+  const startupDiagnosticsRef = useRef<ClaraStartupDiagnostics | null>(null);
+  const startupDisposeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
   );
+  if (!startupDiagnosticsRef.current) {
+    startupDiagnosticsRef.current = new ClaraStartupDiagnostics({
+      enabled: shouldEnableClaraStartupDiagnostics(),
+      readVoiceChat: () => {
+        const session = sessionRef.current;
+        return session
+          ? { state: session.voiceChat.state, muted: session.voiceChat.isMuted }
+          : null;
+      },
+      log: logClaraStartupDiagnostic,
+    });
+  }
+  if (!sessionRef.current) {
+    sessionRef.current = new ElevenLabsAgentSession(sessionAccessToken, {
+      voiceChat: true,
+      apiUrl: API_URL,
+      onDiagnosticEvent: (entry) =>
+        startupDiagnosticsRef.current?.observe(entry),
+    });
+  }
+
+  useEffect(() => {
+    if (startupDisposeTimerRef.current !== null) {
+      clearTimeout(startupDisposeTimerRef.current);
+      startupDisposeTimerRef.current = null;
+    }
+    startupDiagnosticsRef.current?.resume();
+
+    return () => {
+      // Strict Mode replays effects once in development. Pause immediately so
+      // late promises cannot log, then permit the paired setup to resume.
+      startupDiagnosticsRef.current?.suspend();
+      startupDisposeTimerRef.current = setTimeout(() => {
+        startupDiagnosticsRef.current?.dispose();
+        startupDisposeTimerRef.current = null;
+      }, 0);
+    };
+  }, []);
 
   const { sessionState, isStreamReady, connectionQuality } =
     useSessionState(sessionRef);

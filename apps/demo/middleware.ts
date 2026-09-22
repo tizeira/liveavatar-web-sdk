@@ -1,12 +1,63 @@
 import { auth } from "@/auth";
 import { NextResponse } from "next/server";
+import {
+  BETA_ACCESS_COOKIE_NAME,
+  isBetaGateEnabled,
+  verifyBetaCookie,
+} from "@/src/lib/beta-access";
 
-export default auth((req) => {
+export default auth(async (req) => {
   const { pathname, searchParams } = req.nextUrl;
   const session = req.auth;
 
   // ============================================
-  // MAINTENANCE MODE CHECK (highest priority)
+  // BETA ACCESS GATE (highest priority — runs before maintenance)
+  // ============================================
+  //
+  // Defense-in-depth: even before auth, require the beta password.
+  // - HMAC-signed cookie verified server-side
+  // - Static assets, /access, and /api/access exempt to avoid loops
+  // - Optional bypass via BETA_ACCESS_DISABLED env var (dev only)
+  if (isBetaGateEnabled()) {
+    const betaExemptPaths = [
+      "/access",
+      "/api/access",
+      "/api/shopify-access",
+      // Machine-to-machine endpoints enforce their own HMAC/Bearer secrets.
+      // They cannot present the browser-only beta access cookie.
+      "/api/agent-tools",
+      "/api/consultations",
+      "/api/internal/retention",
+      "/api/internal/shopify-catalog-sync",
+      "/api/webhooks/elevenlabs",
+      "/_next",
+      "/favicon.ico",
+      "/icon.png",
+      "/apple-icon.png",
+      "/clara-avatar.png",
+      "/images",
+      "/backgrounds",
+    ];
+    const isBetaExempt = betaExemptPaths.some((path) =>
+      pathname.startsWith(path),
+    );
+
+    if (!isBetaExempt) {
+      const betaCookie = req.cookies.get(BETA_ACCESS_COOKIE_NAME)?.value;
+      const cookieValid = await verifyBetaCookie(betaCookie);
+      if (!cookieValid) {
+        const accessUrl = new URL("/access", req.url);
+        // Preserve original destination so we can redirect back after gate
+        if (pathname !== "/" || req.nextUrl.search) {
+          accessUrl.searchParams.set("redirect", pathname + req.nextUrl.search);
+        }
+        return NextResponse.redirect(accessUrl);
+      }
+    }
+  }
+
+  // ============================================
+  // MAINTENANCE MODE CHECK
   // ============================================
   const isMaintenanceMode = process.env.MAINTENANCE_MODE === "true";
 
@@ -41,11 +92,16 @@ export default auth((req) => {
   // AUTH CHECK (existing logic)
   // ============================================
 
-  // Allow public pages (login, maintenance, auth)
+  // Allow public pages (access, login, maintenance, auth)
+  // CRITICAL: /access must be auth-public, otherwise:
+  //   /access → no session → redirects /login → no beta cookie → redirects /access → LOOP
   if (
+    pathname.startsWith("/access") ||
+    pathname.startsWith("/api/access") ||
     pathname.startsWith("/login") ||
     pathname.startsWith("/api/auth") ||
-    pathname.startsWith("/maintenance")
+    pathname.startsWith("/maintenance") ||
+    pathname === "/clara-avatar.png"
   ) {
     // If already logged in and trying to access login, redirect to home
     if (pathname === "/login" && session) {
@@ -62,6 +118,23 @@ export default auth((req) => {
   // Allow home page when coming from Shopify iframe with token
   // The page will validate the token client-side via /api/shopify-customer
   if (pathname === "/" && searchParams.has("shopify_token")) {
+    return NextResponse.next();
+  }
+
+  // Presence only opens the UI shell; the page and paid-session endpoint both
+  // validate the authenticated ticket before returning private data or
+  // creating a LiveAvatar session.
+  if (pathname === "/" && req.cookies.has("clara_buyer_access")) {
+    return NextResponse.next();
+  }
+
+  // Local visual QA only. NODE_ENV is always "production" in deployed builds,
+  // so this cannot bypass authentication on Vercel.
+  if (
+    process.env.NODE_ENV !== "production" &&
+    pathname === "/" &&
+    searchParams.has("design_preview")
+  ) {
     return NextResponse.next();
   }
 

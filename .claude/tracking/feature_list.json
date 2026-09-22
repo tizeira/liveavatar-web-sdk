@@ -1,0 +1,166 @@
+{
+  "project": "Clara Voice Agent",
+  "lastUpdated": "2026-06-04",
+  "architecture": "HeyGen LiveAvatar LITE + ElevenLabs Agent plugin (LiveKit data-channel events)",
+  "notes": "Reescrito 2026-06-04. La arquitectura WebSocket cruda anterior fue reemplazada por el plugin de ElevenLabs Agent (PR #16). 'develop' (preview) esta ~47 commits delante de 'master' (prod); PR #14 promueve a prod.",
+  "deployments": {
+    "production": {
+      "url": "https://clara.betaskintech.com",
+      "branch": "master",
+      "status": "live (version anterior al plugin)",
+      "voiceAgent": "ElevenLabs Agent"
+    },
+    "preview": {
+      "url": "https://testers.betaskintech.com",
+      "branch": "develop",
+      "status": "working (arquitectura nueva, pendiente QA + promocion)"
+    }
+  },
+  "features": [
+    {
+      "id": "elevenlabs-plugin-migration",
+      "name": "Migracion a plugin ElevenLabs Agent",
+      "description": "Reemplaza el pipeline STT/TTS manual por el plugin del SDK (LiveKit data-channel)",
+      "priority": "HIGH",
+      "status": "completed",
+      "passes": true,
+      "pr": 16,
+      "completedDate": "2026-05-18"
+    },
+    {
+      "id": "heygen-lipsync",
+      "name": "HeyGen Lip Sync (LITE)",
+      "description": "Avatar lip-sync del audio del agente",
+      "priority": "HIGH",
+      "status": "completed",
+      "passes": true
+    },
+    {
+      "id": "greeting-handshake",
+      "name": "Saludo personalizado (handshake contextual_update + [START])",
+      "description": "contextual_update silencioso + sendUserMessage('[START]') dispara saludo por nombre",
+      "priority": "HIGH",
+      "status": "completed",
+      "passes": true,
+      "pr": 17,
+      "completedDate": "2026-05-26"
+    },
+    {
+      "id": "audio-gap-fix",
+      "name": "Audio sin cortes (gaps/mid-response cuts)",
+      "description": "MIN_GAP_DETECTION_SAMPLES + buffers mas grandes + padding solo en interrupciones",
+      "priority": "HIGH",
+      "status": "merged-to-develop",
+      "passes": false,
+      "note": "Mergeado a develop, PENDIENTE verificar en preview (parte de PR #14 hacia master)",
+      "pr": 14
+    },
+    {
+      "id": "prisma-db-tracking",
+      "name": "DB session tracking (Prisma 7 -> 6)",
+      "description": "Downgrade a Prisma 6 para restaurar generate/tracking (P1012 roto en 7)",
+      "priority": "HIGH",
+      "status": "completed",
+      "passes": false,
+      "note": "Compila y genera OK; FALTA confirmar que una sesion real se escribe en Postgres",
+      "pr": 18,
+      "completedDate": "2026-06-03"
+    },
+    {
+      "id": "shopify-purchase-greeting",
+      "name": "Saludo Shopify purchase-aware",
+      "description": "Redirect HMAC desde tema Liquid + contexto de ultima compra en el saludo",
+      "priority": "HIGH",
+      "status": "completed",
+      "passes": false,
+      "note": "Mergeado con 9 tests; FALTA validar redirect Liquid real desde la tienda",
+      "pr": 19,
+      "completedDate": "2026-06-03"
+    },
+    {
+      "id": "beta-access-gate",
+      "name": "Beta access gate (password + cookie HMAC)",
+      "description": "bcrypt + cookie HMAC-SHA256 (Web Crypto), TTL 7d, rate-limit KV, fail-safe",
+      "priority": "HIGH",
+      "status": "completed",
+      "passes": false,
+      "note": "Implementado; FALTA QA end-to-end (lockout 429, persistencia 7d)",
+      "completedDate": "2026-05-26"
+    },
+    {
+      "id": "google-bypass-testers",
+      "name": "Google bypass para testers sin ordenes Shopify",
+      "description": "Testers con Google entran con perfil aun en SHOPIFY_PLAN_LIMITED",
+      "priority": "MEDIUM",
+      "status": "completed",
+      "passes": true
+    },
+    {
+      "id": "session-telemetry",
+      "name": "Telemetria de sesiones (logs + dispositivo por usuario)",
+      "description": "Capturar cada sesion de beta tester en store consultable, digerible por IA; base para circuit-breaker",
+      "priority": "HIGH",
+      "status": "design-in-progress",
+      "passes": false,
+      "note": "Brainstorm pausado: flujo A (revision por sesion) + base para B (auto-apagado). Falta elegir backend + diseno PII."
+    },
+    {
+      "id": "circuit-breaker",
+      "name": "Circuit breaker / auto-apagado por salud",
+      "description": "Si Clara falla para X% de usuarios -> desactivar + redirigir con aviso -> revisar -> reactivar",
+      "priority": "MEDIUM",
+      "status": "pending",
+      "passes": false,
+      "note": "Base existe: outage banner (PR #13). Depende de telemetria (senales tecnicas duras)."
+    },
+    {
+      "id": "habla-sola-bug",
+      "name": "Bug 'Clara habla sola / incoherencias / lip-sync malo'",
+      "description": "Device-especifico, no reproducible en setup del dev (Google + parlantes al max NO lo reproduce)",
+      "priority": "HIGH",
+      "status": "blocked",
+      "passes": false,
+      "note": "Sin telemetria es invisible. Fix candidato = AEC del browser (preserva barge-in), NO mutear."
+    },
+    {
+      "id": "webrtc-reconnect",
+      "name": "Reconexion WebRTC + manejo de SESSION_STOPPED",
+      "description": "Branch UI por end_reason (NO_CREDITS, IDLE_TIMEOUT, MAX_DURATION); 1 reintento en disconnect",
+      "priority": "MEDIUM",
+      "status": "pending",
+      "passes": false
+    },
+    {
+      "id": "mic-permission-ux",
+      "name": "Mic Permission UX",
+      "description": "Mensaje claro cuando se deniega el microfono",
+      "priority": "MEDIUM",
+      "status": "pending",
+      "passes": false
+    },
+    {
+      "id": "safari-fallback",
+      "name": "Safari iOS fallback",
+      "description": "SafariFallbackScreen + banner de advertencia",
+      "priority": "MEDIUM",
+      "status": "completed",
+      "passes": true
+    }
+  ],
+  "openPRs": [
+    {
+      "number": 14,
+      "title": "fix(audio): eliminate mid-response cuts",
+      "base": "master",
+      "head": "develop",
+      "purpose": "Promocion preview -> produccion"
+    },
+    {
+      "number": 12,
+      "title": "docs: PR workflow protection",
+      "base": "develop",
+      "head": "docs/pr-workflow-protection",
+      "purpose": "Husky hooks; STALE 56 commits atras, rebase antes de mergear"
+    }
+  ]
+}

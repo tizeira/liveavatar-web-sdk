@@ -48,9 +48,10 @@ export const MobileLogger: React.FC<MobileLoggerProps> = ({
         )
         .join(" ");
 
-      // Filtrar si es necesario
-      if (filter && !message.includes(filter)) {
-        return;
+      // Filtrar: soporta múltiples prefijos separados por "|"
+      if (filter) {
+        const filters = filter.split("|").map((f) => f.trim());
+        if (!filters.some((f) => message.includes(f))) return;
       }
 
       const entry: LogEntry = {

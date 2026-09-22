@@ -38,6 +38,15 @@ model ClaraConsultation {
   summary         String?
   routine         Json?
 
+  // The voice agent may only propose a Shopify-validated routine. The buyer
+  // must resolve that proposal from the authenticated web UI before it can
+  // replace the durable routine above.
+  routineProposal           Json?
+  routineProposalSummary    String?
+  routineProposedAt         DateTime?
+  routineProposalResolvedAt DateTime?
+  routineConfirmedAt        DateTime?
+
   createdAt               DateTime  @default(now())
   updatedAt               DateTime  @updatedAt
   completedAt             DateTime?

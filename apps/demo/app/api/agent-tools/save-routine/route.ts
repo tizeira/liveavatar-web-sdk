@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { CLARA_AGENT_TOOL_SECRET } from "@/app/api/secrets";
 import { hasValidAgentToolSecret } from "@/src/consultations/security";
-import { saveClaraRoutine } from "@/src/consultations/repository";
+import { proposeClaraRoutine } from "@/src/consultations/repository";
 import type { ClaraRoutine, ClaraRoutineStep } from "@/src/consultations/types";
 import { fetchProductsForClaraByHandles } from "@/src/shopify/client";
 import { sanitizeUserFacingSummary } from "@/src/consultations/privacy";
@@ -213,29 +213,30 @@ export async function POST(request: NextRequest) {
 
   try {
     const neonStartedAt = performance.now();
-    const saved = await saveClaraRoutine(consultationId, summary, routine);
+    const saved = await proposeClaraRoutine(consultationId, summary, routine);
     const neonMs = Math.round(performance.now() - neonStartedAt);
-    const persistedRoutine = saved.consultation.routine as ClaraRoutine;
+    const proposedRoutine = saved.consultation.routineProposal as ClaraRoutine;
     logger.info(
       "Clara routine tool completed",
       {
         tool_total_ms: Math.round(performance.now() - startedAt),
         shopify_ms: shopifyMs,
         neon_ms: neonMs,
-        result_count: persistedRoutine.steps.length,
+        result_count: proposedRoutine.steps.length,
         requested_product_count: new Set(requestedHandles).size,
-        already_saved: !saved.created,
+        already_proposed: !saved.created,
       },
       { route: "/api/agent-tools/save-routine" },
     );
     return NextResponse.json({
-      saved: true,
-      already_saved: !saved.created,
-      routine: persistedRoutine,
+      saved: false,
+      pending_confirmation: true,
+      already_proposed: !saved.created,
+      routine: proposedRoutine,
       rejected_product_handles: [],
       instruction: saved.created
-        ? "Routine saved with Shopify-validated product data. Confirm success once."
-        : "This consultation already has a saved routine. No changes were made; do not announce another save.",
+        ? "Routine proposal created with Shopify-validated product data. Tell the customer to review and confirm it in Mi rutina; do not say it is saved yet."
+        : "This consultation already has a pending routine proposal. Do not create or announce another save.",
     });
   } catch {
     return NextResponse.json(

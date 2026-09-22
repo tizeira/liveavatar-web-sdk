@@ -32,6 +32,13 @@ export type ClaraRoutine = {
 export type ClaraSavedRoutine = {
   routine: ClaraRoutine | null;
   consultationDate: string | null;
+  pendingProposal: ClaraRoutineProposal | null;
+};
+
+export type ClaraRoutineProposal = {
+  consultationId: string;
+  routine: ClaraRoutine;
+  proposedAt: string;
 };
 
 export type ClaraConsultationResult = {

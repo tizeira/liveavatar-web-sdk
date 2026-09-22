@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   readBuyerTicket: vi.fn(),
   deriveTesterKey: vi.fn(),
   getSavedRoutine: vi.fn(),
+  resolveProposal: vi.fn(),
 }));
 
 vi.mock("@/auth", () => ({ auth: mocks.auth }));
@@ -19,9 +20,12 @@ vi.mock("@/src/lib/clara-buyer-access", () => ({
 }));
 vi.mock("@/src/consultations/repository", () => ({
   getSavedClaraRoutine: mocks.getSavedRoutine,
+  resolveClaraRoutineProposal: mocks.resolveProposal,
 }));
 
-const { GET } = await import("@/app/api/consultations/saved-routine/route");
+const { GET, POST } = await import(
+  "@/app/api/consultations/saved-routine/route"
+);
 
 function request(cookie?: string) {
   return new NextRequest("http://localhost/api/consultations/saved-routine", {
@@ -40,7 +44,9 @@ describe("GET /api/consultations/saved-routine", () => {
     mocks.getSavedRoutine.mockResolvedValue({
       routine: null,
       consultationDate: null,
+      pendingProposal: null,
     });
+    mocks.resolveProposal.mockResolvedValue({ resolved: true });
   });
 
   it("rejects missing or tampered buyer cookies without querying routines", async () => {
@@ -68,6 +74,7 @@ describe("GET /api/consultations/saved-routine", () => {
     mocks.getSavedRoutine.mockResolvedValue({
       routine: { concerns: [], cautions: [], steps: [{ instruction: "Paso" }] },
       consultationDate: "2026-09-01T10:00:00.000Z",
+      pendingProposal: null,
     });
 
     const response = await GET(request("valid-ticket"));
@@ -89,11 +96,12 @@ describe("GET /api/consultations/saved-routine", () => {
     expect(mocks.getSavedRoutine).toHaveBeenCalledWith("tester-key");
   });
 
-  it("returns only the routine and consultation date", async () => {
+  it("returns only the routine dashboard contract", async () => {
     mocks.readBuyerTicket.mockResolvedValue({ buyerKey: "buyer-a" });
     mocks.getSavedRoutine.mockResolvedValue({
       routine: { concerns: [], cautions: [], steps: [{ instruction: "Paso" }] },
       consultationDate: "2026-09-01T10:00:00.000Z",
+      pendingProposal: null,
       transcript: ["private"],
       accessTokenHash: "private",
       consultationId: "private",
@@ -103,7 +111,49 @@ describe("GET /api/consultations/saved-routine", () => {
     expect(await response.json()).toEqual({
       routine: { concerns: [], cautions: [], steps: [{ instruction: "Paso" }] },
       consultationDate: "2026-09-01T10:00:00.000Z",
+      pendingProposal: null,
     });
+  });
+
+  it("confirms only the authenticated buyer's pending proposal", async () => {
+    mocks.readBuyerTicket.mockResolvedValue({ buyerKey: "buyer-a" });
+    const consultationId = "51bcaeed-9e1b-4c75-ad05-7b23fbd9d46f";
+    const response = await POST(
+      new NextRequest("http://localhost/api/consultations/saved-routine", {
+        method: "POST",
+        headers: {
+          cookie: "clara_buyer_access=valid-ticket",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ consultationId, action: "confirm" }),
+      }),
+    );
+    expect(response.status).toBe(200);
+    expect(mocks.resolveProposal).toHaveBeenCalledWith({
+      consultationId,
+      shopifyCustomerKey: "buyer-a",
+      action: "confirm",
+    });
+    expect(await response.json()).toEqual({ resolved: true, confirmed: true });
+  });
+
+  it("reports an already resolved proposal without rewriting it", async () => {
+    mocks.readBuyerTicket.mockResolvedValue({ buyerKey: "buyer-a" });
+    mocks.resolveProposal.mockResolvedValue({ resolved: false });
+    const response = await POST(
+      new NextRequest("http://localhost/api/consultations/saved-routine", {
+        method: "POST",
+        headers: {
+          cookie: "clara_buyer_access=valid-ticket",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          consultationId: "51bcaeed-9e1b-4c75-ad05-7b23fbd9d46f",
+          action: "confirm",
+        }),
+      }),
+    );
+    expect(response.status).toBe(409);
   });
 
   it("returns no-store 503 responses when an access or database service fails", async () => {

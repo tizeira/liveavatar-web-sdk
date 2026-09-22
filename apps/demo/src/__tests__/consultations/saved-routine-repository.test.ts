@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ findMany: vi.fn() }));
+const mocks = vi.hoisted(() => ({ findFirst: vi.fn(), findMany: vi.fn() }));
 
 vi.mock("@/src/lib/db/prisma", () => ({
   prisma: { claraConsultation: mocks },
@@ -25,7 +25,10 @@ const routine = {
 };
 
 describe("getSavedClaraRoutine", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.findFirst.mockResolvedValue(null);
+  });
 
   it("skips a later empty consultation without hiding an older saved routine", async () => {
     mocks.findMany.mockResolvedValue([
@@ -40,6 +43,7 @@ describe("getSavedClaraRoutine", () => {
     await expect(getSavedClaraRoutine(buyerKey)).resolves.toEqual({
       routine,
       consultationDate: olderDate.toISOString(),
+      pendingProposal: null,
     });
     expect(mocks.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -68,6 +72,7 @@ describe("getSavedClaraRoutine", () => {
     await expect(getSavedClaraRoutine(buyerKey)).resolves.toEqual({
       routine: { ...routine, concerns: ["Acné"] },
       consultationDate: newerDate.toISOString(),
+      pendingProposal: null,
     });
   });
 
@@ -77,6 +82,7 @@ describe("getSavedClaraRoutine", () => {
     await expect(getSavedClaraRoutine(buyerKey)).resolves.toEqual({
       routine: null,
       consultationDate: null,
+      pendingProposal: null,
     });
   });
 
@@ -94,9 +100,33 @@ describe("getSavedClaraRoutine", () => {
     await expect(getSavedClaraRoutine(buyerKey)).resolves.toEqual({
       routine,
       consultationDate: olderDate.toISOString(),
+      pendingProposal: null,
     });
     expect(mocks.findMany).toHaveBeenLastCalledWith(
       expect.objectContaining({ cursor: { id: "empty-19" }, skip: 1 }),
     );
+  });
+
+  it("returns a pending proposal without hiding the last confirmed routine", async () => {
+    const proposedAt = new Date("2026-09-03T10:00:00.000Z");
+    const proposal = { ...routine, concerns: ["Sensibilidad"] };
+    mocks.findFirst.mockResolvedValue({
+      id: "proposal-consultation",
+      routineProposal: proposal,
+      routineProposedAt: proposedAt,
+    });
+    mocks.findMany.mockResolvedValue([
+      { id: "older", createdAt: olderDate, routine },
+    ]);
+
+    await expect(getSavedClaraRoutine(buyerKey)).resolves.toEqual({
+      routine,
+      consultationDate: olderDate.toISOString(),
+      pendingProposal: {
+        consultationId: "proposal-consultation",
+        routine: proposal,
+        proposedAt: proposedAt.toISOString(),
+      },
+    });
   });
 });

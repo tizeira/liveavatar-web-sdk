@@ -121,6 +121,112 @@ export async function saveClaraRoutine(
   });
 }
 
+export async function proposeClaraRoutine(
+  consultationId: string,
+  summary: string,
+  routine: ClaraRoutine,
+) {
+  return prisma.$transaction(async (tx) => {
+    const write = await tx.claraConsultation.updateMany({
+      where: {
+        id: consultationId,
+        routineProposal: { equals: Prisma.DbNull },
+        routineProposalResolvedAt: null,
+      },
+      data: {
+        routineProposal: routine as unknown as Prisma.InputJsonValue,
+        routineProposalSummary: sanitizeUserFacingSummary(summary),
+        routineProposedAt: new Date(),
+      },
+    });
+    const consultation = await tx.claraConsultation.findUniqueOrThrow({
+      where: { id: consultationId },
+    });
+    return { consultation, created: write.count === 1 };
+  });
+}
+
+export async function resolveClaraRoutineProposal(input: {
+  consultationId: string;
+  shopifyCustomerKey: string;
+  action: "confirm" | "dismiss";
+}) {
+  return prisma.$transaction(async (tx) => {
+    const existing = await tx.claraConsultation.findFirstOrThrow({
+      where: {
+        id: input.consultationId,
+        shopifyCustomerKey: input.shopifyCustomerKey,
+        recordExpiresAt: { gt: new Date() },
+      },
+    });
+    const proposal = existing.routineProposal as ClaraRoutine | null;
+    if (!proposal || !hasRoutineSteps(existing.routineProposal)) {
+      return { consultation: existing, resolved: false };
+    }
+
+    const resolvedAt = new Date();
+    const confirmed = input.action === "confirm";
+    const write = await tx.claraConsultation.updateMany({
+      where: {
+        id: existing.id,
+        shopifyCustomerKey: input.shopifyCustomerKey,
+        routineProposal: {
+          equals: proposal as unknown as Prisma.InputJsonValue,
+        },
+        routineProposalResolvedAt: null,
+      },
+      data: {
+        ...(confirmed
+          ? {
+              summary:
+                sanitizeUserFacingSummary(existing.routineProposalSummary) ||
+                undefined,
+              routine: proposal as unknown as Prisma.InputJsonValue,
+              routineConfirmedAt: resolvedAt,
+              status:
+                existing.status === ClaraConsultationStatus.completed
+                  ? ClaraConsultationStatus.completed
+                  : existing.status === ClaraConsultationStatus.processing
+                    ? ClaraConsultationStatus.processing
+                    : ClaraConsultationStatus.routine_ready,
+            }
+          : {}),
+        routineProposal: Prisma.DbNull,
+        routineProposalSummary: null,
+        routineProposalResolvedAt: resolvedAt,
+      },
+    });
+    const resolved = write.count === 1;
+    const consultation = await tx.claraConsultation.findUniqueOrThrow({
+      where: { id: existing.id },
+    });
+
+    if (resolved && confirmed) {
+      const metricClaim = await tx.claraConsultation.updateMany({
+        where: {
+          id: existing.id,
+          status: ClaraConsultationStatus.completed,
+          metricsRecordedAt: { not: null },
+          routineMetricRecordedAt: null,
+        },
+        data: { routineMetricRecordedAt: resolvedAt },
+      });
+      if (metricClaim.count === 1) {
+        await tx.claraDailyMetric.upsert({
+          where: { date: utcDay(existing.completedAt || resolvedAt) },
+          create: {
+            date: utcDay(existing.completedAt || resolvedAt),
+            consultationsWithRoutine: 1,
+          },
+          update: { consultationsWithRoutine: { increment: 1 } },
+        });
+      }
+    }
+
+    return { consultation, resolved };
+  });
+}
+
 export async function completeClaraConsultation(input: {
   consultationId: string;
   elevenLabsConversationId: string;
@@ -245,6 +351,28 @@ function hasRoutineSteps(routine: Prisma.JsonValue | null): boolean {
 export async function getSavedClaraRoutine(
   shopifyCustomerKey: string,
 ): Promise<ClaraSavedRoutine> {
+  const pending = await prisma.claraConsultation.findFirst({
+    where: {
+      shopifyCustomerKey,
+      recordExpiresAt: { gt: new Date() },
+      routineProposal: { not: Prisma.DbNull },
+      routineProposalResolvedAt: null,
+    },
+    orderBy: [{ routineProposedAt: "desc" }, { updatedAt: "desc" }],
+    select: {
+      id: true,
+      routineProposal: true,
+      routineProposedAt: true,
+    },
+  });
+  const pendingProposal =
+    pending?.routineProposedAt && hasRoutineSteps(pending.routineProposal)
+      ? {
+          consultationId: pending.id,
+          routine: pending.routineProposal as unknown as ClaraRoutine,
+          proposedAt: pending.routineProposedAt.toISOString(),
+        }
+      : null;
   // Prisma's JSON filters can distinguish database null from JSON values, but
   // cannot express a portable non-empty JSON array predicate. Scan bounded
   // batches in deterministic creation order so a newer empty consultation
@@ -269,10 +397,11 @@ export async function getSavedClaraRoutine(
       return {
         routine: consultation.routine as unknown as ClaraRoutine,
         consultationDate: consultation.createdAt.toISOString(),
+        pendingProposal,
       };
     }
     if (consultations.length < SAVED_ROUTINE_BATCH_SIZE) {
-      return { routine: null, consultationDate: null };
+      return { routine: null, consultationDate: null, pendingProposal };
     }
     cursor = consultations.at(-1)?.id;
   }

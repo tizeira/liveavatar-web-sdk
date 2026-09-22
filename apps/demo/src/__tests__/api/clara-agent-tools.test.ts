@@ -20,7 +20,7 @@ vi.mock("@/src/shopify/catalog", () => ({
 }));
 
 vi.mock("@/src/consultations/repository", () => ({
-  saveClaraRoutine: (...args: unknown[]) => mockSaveRoutine(...args),
+  proposeClaraRoutine: (...args: unknown[]) => mockSaveRoutine(...args),
 }));
 
 const productRoute = await import(
@@ -49,7 +49,7 @@ beforeEach(() => {
   mockFetchProducts.mockResolvedValue(new Map());
   mockSaveRoutine.mockImplementation(
     async (_consultationId: string, _summary: string, routine: unknown) => ({
-      consultation: { routine },
+      consultation: { routineProposal: routine },
       created: true,
     }),
   );
@@ -187,7 +187,7 @@ describe("Clara routine tool", () => {
     expect(mockSaveRoutine).not.toHaveBeenCalled();
   });
 
-  it("returns the original routine without rewriting on a repeated save", async () => {
+  it("returns the original proposal without rewriting on a repeated call", async () => {
     const originalRoutine = {
       concerns: ["hidratación"],
       cautions: [],
@@ -201,7 +201,7 @@ describe("Clara routine tool", () => {
       ],
     };
     mockSaveRoutine.mockResolvedValue({
-      consultation: { routine: originalRoutine },
+      consultation: { routineProposal: originalRoutine },
       created: false,
     });
 
@@ -221,10 +221,11 @@ describe("Clara routine tool", () => {
     const json = await response.json();
 
     expect(response.status).toBe(200);
-    expect(json.saved).toBe(true);
-    expect(json.already_saved).toBe(true);
+    expect(json.saved).toBe(false);
+    expect(json.pending_confirmation).toBe(true);
+    expect(json.already_proposed).toBe(true);
     expect(json.routine).toEqual(originalRoutine);
-    expect(json.instruction).toContain("No changes were made");
+    expect(json.instruction).toContain("pending routine proposal");
   });
 
   it("replaces a handle with canonical Shopify product data", async () => {

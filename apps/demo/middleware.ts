@@ -28,6 +28,7 @@ export default auth(async (req) => {
       "/api/agent-tools",
       "/api/consultations",
       "/api/internal/retention",
+      "/api/internal/shopify-catalog-sync",
       "/api/webhooks/elevenlabs",
       "/_next",
       "/favicon.ico",

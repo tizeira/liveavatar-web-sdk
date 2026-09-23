@@ -22,8 +22,11 @@ vi.mock("@/src/lib/db/prisma", () => ({
   },
 }));
 
-const { replaceClaraCatalogSnapshot, searchSyncedProductsForClara } =
-  await import("@/src/shopify/catalog");
+const {
+  listAvailableSyncedProductsForClara,
+  replaceClaraCatalogSnapshot,
+  searchSyncedProductsForClara,
+} = await import("@/src/shopify/catalog");
 
 const product = {
   id: "gid://shopify/Product/1",
@@ -72,6 +75,31 @@ describe("Clara durable catalog", () => {
 
     expect(result.initialized).toBe(true);
     expect(result.products.map((item) => item.handle)).toEqual(["beta-hidra"]);
+  });
+
+  it("lists only the current synced catalog for product-link validation", async () => {
+    mockProductFindMany.mockResolvedValue([{ payload: product }]);
+
+    expect(await listAvailableSyncedProductsForClara()).toEqual({
+      initialized: true,
+      products: [product],
+    });
+    expect(mockProductFindMany).toHaveBeenCalledWith({
+      where: { availableForSale: true },
+      select: { payload: true },
+      orderBy: { title: "asc" },
+      take: 1_000,
+    });
+  });
+
+  it("does not list products when the catalog has not been initialized", async () => {
+    mockStateFindUnique.mockResolvedValue(null);
+
+    expect(await listAvailableSyncedProductsForClara()).toEqual({
+      initialized: false,
+      products: [],
+    });
+    expect(mockProductFindMany).not.toHaveBeenCalled();
   });
 
   it("persists a complete, valid empty snapshot", async () => {

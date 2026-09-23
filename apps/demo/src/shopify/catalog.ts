@@ -181,3 +181,27 @@ export async function searchSyncedProductsForClara(
 
   return { initialized: true, products };
 }
+
+export async function listAvailableSyncedProductsForClara(): Promise<{
+  initialized: boolean;
+  products: ClaraCatalogProduct[];
+}> {
+  const state = await prisma.claraCatalogState.findUnique({
+    where: { source: CATALOG_SOURCE },
+    select: { source: true },
+  });
+  if (!state) return { initialized: false, products: [] };
+
+  const rows = await prisma.claraCatalogProduct.findMany({
+    where: { availableForSale: true },
+    select: { payload: true },
+    orderBy: { title: "asc" },
+    take: MAX_CATALOG_PRODUCTS,
+  });
+  return {
+    initialized: true,
+    products: rows
+      .map((row) => readProductPayload(row.payload))
+      .filter((product): product is ClaraCatalogProduct => Boolean(product)),
+  };
+}

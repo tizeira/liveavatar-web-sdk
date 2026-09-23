@@ -5,18 +5,24 @@ process.env.CLARA_AGENT_TOOL_SECRET = "test-tool-secret";
 
 const mockSearchProducts = vi.fn();
 const mockSearchSyncedProducts = vi.fn();
+const mockListAvailableSyncedProducts = vi.fn();
 const mockFetchProducts = vi.fn();
+const mockFetchCatalogSnapshot = vi.fn();
 const mockSaveRoutine = vi.fn();
 
 vi.mock("@/src/shopify/client", () => ({
   searchProductsForClara: (...args: unknown[]) => mockSearchProducts(...args),
   fetchProductsForClaraByHandles: (...args: unknown[]) =>
     mockFetchProducts(...args),
+  fetchClaraCatalogSnapshot: (...args: unknown[]) =>
+    mockFetchCatalogSnapshot(...args),
 }));
 
 vi.mock("@/src/shopify/catalog", () => ({
   searchSyncedProductsForClara: (...args: unknown[]) =>
     mockSearchSyncedProducts(...args),
+  listAvailableSyncedProductsForClara: (...args: unknown[]) =>
+    mockListAvailableSyncedProducts(...args),
 }));
 
 vi.mock("@/src/consultations/repository", () => ({
@@ -47,6 +53,11 @@ beforeEach(() => {
     products: [],
   });
   mockFetchProducts.mockResolvedValue(new Map());
+  mockFetchCatalogSnapshot.mockResolvedValue([]);
+  mockListAvailableSyncedProducts.mockResolvedValue({
+    initialized: true,
+    products: [],
+  });
   mockSaveRoutine.mockResolvedValue({});
 });
 
@@ -135,7 +146,7 @@ describe("Clara Shopify product tool", () => {
 describe("Clara routine tool", () => {
   const consultationId = "51bcaeed-9e1b-4c75-ad05-7b23fbd9d46f";
 
-  it("omits invented or unavailable Shopify product handles", async () => {
+  it("rejects invented or unavailable Shopify product handles without saving", async () => {
     const response = await routineRoute.POST(
       request("/api/agent-tools/save-routine", {
         consultation_id: consultationId,
@@ -155,8 +166,137 @@ describe("Clara routine tool", () => {
     const json = await response.json();
 
     expect(response.status).toBe(200);
-    expect(json.routine.steps[0].product).toBeNull();
+    expect(json.saved).toBe(false);
+    expect(json.retryable).toBe(true);
+    expect(json.code).toBe("product_unavailable");
     expect(json.rejected_product_handles).toEqual(["producto-inventado"]);
+    expect(mockSaveRoutine).not.toHaveBeenCalled();
+  });
+
+  it("rejects product names without handles and suggests current catalog handles", async () => {
+    mockListAvailableSyncedProducts.mockResolvedValue({
+      initialized: true,
+      products: [
+        { title: "Beta Hacker ID Radiance", handle: "id-radiance" },
+        { title: "Beta Hidra", handle: "beta-hidra" },
+      ],
+    });
+
+    const response = await routineRoute.POST(
+      request("/api/agent-tools/save-routine", {
+        consultation_id: consultationId,
+        summary: "Rutina acordada.",
+        steps: [
+          {
+            moment: "morning_evening",
+            order: 1,
+            instruction: "Aplicar ID Radiance sobre la piel limpia",
+          },
+          {
+            moment: "morning_evening",
+            order: 2,
+            instruction: "Aplicar Beta Hidra para hidratar",
+          },
+        ],
+      }),
+    );
+    const json = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(json.saved).toBe(false);
+    expect(json.retryable).toBe(true);
+    expect(json.code).toBe("product_handle_required");
+    expect(json.unlinked_products).toEqual([
+      {
+        step: 1,
+        products: [{ title: "Beta Hacker ID Radiance", handle: "id-radiance" }],
+      },
+      { step: 2, products: [{ title: "Beta Hidra", handle: "beta-hidra" }] },
+    ]);
+    expect(mockSaveRoutine).not.toHaveBeenCalled();
+    expect(mockFetchCatalogSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("does not save when only one of two named products is linked", async () => {
+    mockFetchProducts.mockResolvedValue(
+      new Map([["beta-hidra", { title: "Beta Hidra", handle: "beta-hidra" }]]),
+    );
+    mockListAvailableSyncedProducts.mockResolvedValue({
+      initialized: true,
+      products: [
+        { title: "Beta Hidra", handle: "beta-hidra" },
+        { title: "ID Radiance", handle: "id-radiance" },
+      ],
+    });
+
+    const response = await routineRoute.POST(
+      request("/api/agent-tools/save-routine", {
+        consultation_id: consultationId,
+        summary: "Rutina acordada.",
+        steps: [
+          {
+            moment: "morning",
+            order: 1,
+            instruction: "Aplicar Beta Hidra",
+            product_handle: "beta-hidra",
+          },
+          {
+            moment: "evening",
+            order: 2,
+            instruction: "Aplicar ID Radiance",
+          },
+        ],
+      }),
+    );
+    const json = await response.json();
+
+    expect(json.saved).toBe(false);
+    expect(json.unlinked_products).toEqual([
+      { step: 2, products: [{ title: "ID Radiance", handle: "id-radiance" }] },
+    ]);
+    expect(mockSaveRoutine).not.toHaveBeenCalled();
+  });
+
+  it("uses one Shopify snapshot only when the synced catalog is uninitialized", async () => {
+    mockListAvailableSyncedProducts.mockResolvedValue({
+      initialized: false,
+      products: [],
+    });
+    mockFetchCatalogSnapshot.mockResolvedValue([
+      { product: { title: "Beta Hidra", handle: "beta-hidra" } },
+    ]);
+
+    const response = await routineRoute.POST(
+      request("/api/agent-tools/save-routine", {
+        consultation_id: consultationId,
+        summary: "Rutina acordada.",
+        steps: [
+          { moment: "morning", order: 1, instruction: "Aplicar Beta Hidra" },
+        ],
+      }),
+    );
+
+    expect((await response.json()).code).toBe("product_handle_required");
+    expect(mockFetchCatalogSnapshot).toHaveBeenCalledOnce();
+    expect(mockSaveRoutine).not.toHaveBeenCalled();
+  });
+
+  it("allows a genuine product-free routine without inventing a product", async () => {
+    mockListAvailableSyncedProducts.mockResolvedValue({
+      initialized: true,
+      products: [{ title: "Beta Hidra", handle: "beta-hidra" }],
+    });
+    const response = await routineRoute.POST(
+      request("/api/agent-tools/save-routine", {
+        consultation_id: consultationId,
+        summary: "Rutina sin productos acordada.",
+        steps: [
+          { moment: "morning", order: 1, instruction: "Lavar el rostro" },
+        ],
+      }),
+    );
+
+    expect(response.status).toBe(200);
     expect(mockSaveRoutine).toHaveBeenCalledOnce();
   });
 

@@ -1,4 +1,5 @@
 import type { ClaraRoutine, ClaraRoutineStep } from "./types";
+import type { ClaraCatalogProduct } from "../shopify/types";
 
 export function routineGoalsText(
   routine: Pick<ClaraRoutine, "concerns" | "steps"> | null | undefined,
@@ -55,4 +56,45 @@ export function consolidateRoutineSteps(
   }
 
   return output.map((step, index) => ({ ...step, order: index + 1 }));
+}
+
+function normalizedProductText(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function mentionsProduct(
+  instruction: string,
+  product: ClaraCatalogProduct,
+): boolean {
+  const text = ` ${normalizedProductText(instruction)} `;
+  const titleWords = normalizedProductText(product.title).split(" ");
+  const handle = normalizedProductText(product.handle);
+  const phrases = [titleWords.join(" "), handle];
+  // Product titles often have a brand prefix; keep a distinctive two-word
+  // suffix such as "ID Radiance" without matching generic single words.
+  for (let start = 1; start <= titleWords.length - 2; start += 1) {
+    phrases.push(titleWords.slice(start).join(" "));
+  }
+  return phrases.some(
+    (phrase) => phrase.length >= 8 && text.includes(` ${phrase} `),
+  );
+}
+
+export function findUnlinkedRoutineProducts(
+  steps: Array<{ instruction: string; productHandle: string }>,
+  products: ClaraCatalogProduct[],
+): Array<{ step: number; products: Array<{ title: string; handle: string }> }> {
+  return steps.flatMap((step, index) => {
+    if (step.productHandle || !step.instruction) return [];
+    const matches = products
+      .filter((product) => mentionsProduct(step.instruction, product))
+      .map(({ title, handle }) => ({ title, handle }));
+    return matches.length ? [{ step: index + 1, products: matches }] : [];
+  });
 }

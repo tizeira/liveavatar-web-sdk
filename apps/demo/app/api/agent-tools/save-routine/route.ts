@@ -3,9 +3,16 @@ import { CLARA_AGENT_TOOL_SECRET } from "@/app/api/secrets";
 import { hasValidAgentToolSecret } from "@/src/consultations/security";
 import { saveClaraRoutine } from "@/src/consultations/repository";
 import type { ClaraRoutine, ClaraRoutineStep } from "@/src/consultations/types";
-import { fetchProductsForClaraByHandles } from "@/src/shopify/client";
+import {
+  fetchClaraCatalogSnapshot,
+  fetchProductsForClaraByHandles,
+} from "@/src/shopify/client";
+import { listAvailableSyncedProductsForClara } from "@/src/shopify/catalog";
 import { sanitizeUserFacingSummary } from "@/src/consultations/privacy";
-import { consolidateRoutineSteps } from "@/src/consultations/routine";
+import {
+  consolidateRoutineSteps,
+  findUnlinkedRoutineProducts,
+} from "@/src/consultations/routine";
 import { logger } from "@/src/lib/logger/secure-logger";
 import type { ClaraCatalogProduct } from "@/src/shopify/types";
 
@@ -65,7 +72,6 @@ export async function POST(request: NextRequest) {
   }
 
   const steps: ClaraRoutineStep[] = [];
-  const rejectedProductHandles: string[] = [];
   const requestedHandles = rawSteps.flatMap((rawStep) => {
     if (!rawStep || typeof rawStep !== "object") return [];
     const handle = cleanText(
@@ -86,6 +92,72 @@ export async function POST(request: NextRequest) {
   }
   const shopifyMs = Math.round(performance.now() - shopifyStartedAt);
 
+  const rejectedProductHandles = [
+    ...new Set(
+      requestedHandles.filter((handle) => !verifiedProducts.has(handle)),
+    ),
+  ];
+  if (rejectedProductHandles.length) {
+    return NextResponse.json({
+      saved: false,
+      retryable: true,
+      error:
+        "Some products are unavailable. Search the current catalog and retry before telling the customer the routine was saved.",
+      code: "product_unavailable",
+      rejected_product_handles: rejectedProductHandles,
+    });
+  }
+
+  const missingHandleSteps = rawSteps.map((rawStep) => {
+    const input =
+      rawStep && typeof rawStep === "object"
+        ? (rawStep as Record<string, unknown>)
+        : {};
+    const moment = cleanText(input.moment, 20);
+    return {
+      instruction: validMoments.has(moment)
+        ? cleanText(input.instruction, 300)
+        : "",
+      productHandle: cleanText(input.product_handle, 255),
+    };
+  });
+  if (
+    missingHandleSteps.some((step) => step.instruction && !step.productHandle)
+  ) {
+    let catalogProducts: ClaraCatalogProduct[];
+    try {
+      const synced = await listAvailableSyncedProductsForClara();
+      catalogProducts = synced.initialized
+        ? synced.products
+        : (await fetchClaraCatalogSnapshot()).map(({ product }) => product);
+    } catch {
+      try {
+        catalogProducts = (await fetchClaraCatalogSnapshot()).map(
+          ({ product }) => product,
+        );
+      } catch {
+        return NextResponse.json(
+          { error: "Shopify catalog is temporarily unavailable" },
+          { status: 502 },
+        );
+      }
+    }
+    const unlinkedProducts = findUnlinkedRoutineProducts(
+      missingHandleSteps,
+      catalogProducts,
+    );
+    if (unlinkedProducts.length) {
+      return NextResponse.json({
+        saved: false,
+        retryable: true,
+        error:
+          "A routine step mentions a current product without its handle. Search the catalog, add the exact product_handle and retry before confirming the save.",
+        code: "product_handle_required",
+        unlinked_products: unlinkedProducts,
+      });
+    }
+  }
+
   for (const [index, rawStep] of rawSteps.entries()) {
     if (!rawStep || typeof rawStep !== "object") continue;
     const input = rawStep as Record<string, unknown>;
@@ -98,10 +170,6 @@ export async function POST(request: NextRequest) {
     let product = null;
     if (productHandle) {
       product = verifiedProducts.get(productHandle) || null;
-      if (!product || !product.availableForSale || !product.url) {
-        rejectedProductHandles.push(productHandle);
-        product = null;
-      }
     }
 
     steps.push({
@@ -195,10 +263,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       saved: true,
       routine,
-      rejected_product_handles: rejectedProductHandles,
-      instruction: rejectedProductHandles.length
-        ? "Some product handles were not valid Shopify products and were omitted. Do not mention or link them."
-        : "Routine saved with Shopify-validated product data.",
+      rejected_product_handles: [],
+      instruction: "Routine saved with Shopify-validated product data.",
     });
   } catch {
     return NextResponse.json(

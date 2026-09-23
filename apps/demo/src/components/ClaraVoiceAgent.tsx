@@ -1456,12 +1456,16 @@ export const SessionRecap: React.FC<SessionRecapProps> = ({
             type="button"
             className={styles.primaryButton}
             onClick={() =>
-              hasRoutine ? onViewChange("routine") : onTalkAgain()
+              hasRoutine
+                ? onViewSavedRoutine
+                  ? onViewSavedRoutine()
+                  : onViewChange("routine")
+                : onTalkAgain()
             }
           >
-            {hasRoutine ? "Ver próximos pasos" : "Hablar nuevamente con Clara"}
+            {hasRoutine ? "Ver mi rutina" : "Hablar nuevamente con Clara"}
           </button>
-          {onViewSavedRoutine && (
+          {!hasRoutine && onViewSavedRoutine && (
             <button
               type="button"
               className={styles.secondaryButton}

@@ -4,6 +4,39 @@ import { describe, it, expect, vi } from "vitest";
 import { SessionRecap } from "@/src/components/ClaraVoiceAgent";
 
 describe("saved routine presentation", () => {
+  it("offers one routine action after a consultation saves a routine", () => {
+    const html = renderToStaticMarkup(
+      <SessionRecap
+        view="summary"
+        durationSeconds={60}
+        result={{
+          consultationId: "test",
+          status: "completed",
+          summary: "Rutina confirmada",
+          routine: {
+            concerns: ["Hidratación"],
+            cautions: [],
+            steps: [
+              {
+                order: 1,
+                moment: "morning",
+                instruction: "Aplicar sobre piel limpia",
+                product: null,
+              },
+            ],
+          },
+          transcript: [],
+        }}
+        onTalkAgain={vi.fn()}
+        onViewChange={vi.fn()}
+        onViewSavedRoutine={vi.fn()}
+      />,
+    );
+    expect(html).toContain("Ver mi rutina");
+    expect(html).not.toContain("Ver próximos pasos");
+    expect(html).not.toContain("Mi rutina guardada");
+  });
+
   it("shows a persisted routine independently from the current consultation", () => {
     const html = renderToStaticMarkup(
       <SessionRecap

@@ -56,13 +56,36 @@ export function SavedRoutinePanel({
   }, [attempt]);
   if (value?.routine?.steps.length) return <>{renderRoutine(value)}</>;
   return (
+    <SavedRoutineStatus
+      loaded={Boolean(value)}
+      error={error}
+      onBack={onBack}
+      onRetry={() => setAttempt((n) => n + 1)}
+    />
+  );
+}
+
+/** Empty, loading and failure are distinct; a failed fetch is not a deleted routine. */
+export function SavedRoutineStatus({
+  loaded,
+  error,
+  onBack,
+  onRetry,
+}: {
+  loaded: boolean;
+  error: string | null;
+  onBack: () => void;
+  onRetry: () => void;
+}) {
+  return (
     <div className={styles.recapScreen}>
       <div className={styles.recapInner}>
+        <p className={styles.eyebrow}>Beta Skintech / Tu cuidado diario</p>
         <h1 className={styles.recapTitle}>Mi rutina guardada</h1>
         <p className={styles.recapText} role={error ? "alert" : "status"}>
           {error ||
-            (value
-              ? "Todavía no tenés una rutina guardada. Podés acordarla y confirmar su guardado al conversar con Clara."
+            (loaded
+              ? "Aún no tienes una rutina guardada. Acuérdala con Clara y confirma que quieres guardarla."
               : "Buscando tu rutina guardada…")}
         </p>
         <div className={styles.recapActions}>
@@ -70,7 +93,7 @@ export function SavedRoutinePanel({
             <button
               type="button"
               className={styles.secondaryButton}
-              onClick={() => setAttempt((n) => n + 1)}
+              onClick={onRetry}
             >
               Reintentar
             </button>

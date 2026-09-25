@@ -58,7 +58,7 @@ export function ShopifyVerificationStates({
         <Brand />
         <main className={styles.centerContent}>
           <div className={styles.micHalo}>
-            <Loader2 size={48} color="#0b63ce" className="animate-spin" />
+            <Loader2 size={32} className={styles.loadingSpinner} />
           </div>
           <h1 className={`${styles.permissionTitle} ${styles.display}`}>
             Preparando tu acceso…

@@ -16,6 +16,7 @@ import {
   getMockScenario,
 } from "@/src/lib/mock-data";
 import { buildShopifyAccessRequestBody } from "@/src/shopify/access-request";
+import labStyles from "../src/components/ClaraVoiceAgent.module.css";
 
 type PageState =
   | "loading"
@@ -159,6 +160,8 @@ export default function Home() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
+    if (process.env.NODE_ENV !== "production" && params.has("design_preview"))
+      return;
     if (params.has("shopify_token") && params.has("customer_id")) return;
     void restoreShopifyAccess();
   }, [restoreShopifyAccess]);
@@ -257,7 +260,7 @@ export default function Home() {
       setCustomerData({
         firstName: "Ivan",
         ordersCount: 1,
-        lastOrderProduct: "Booster 02 — Beta Lift",
+        lastOrderProduct: "Beta Hidra (demostración)",
       });
       setPageState("verified");
       return;
@@ -412,45 +415,38 @@ export default function Home() {
   // Shopify redirect state - show message to access from store
   if (pageState === "shopify_redirect") {
     return (
-      <div className="min-h-screen flex items-center justify-center p-4 landing-gradient">
-        <div className="text-center max-w-md card-ios relative z-10">
-          <div className="mx-auto mb-4 w-16 h-16 rounded-full glass-morphism-strong flex items-center justify-center shadow-lg">
-            <span
-              className="text-2xl font-bold"
-              style={{ color: "var(--platinum-800)" }}
-            >
-              C
-            </span>
-          </div>
-          <h2 className="text-xl font-semibold text-neutral-800 mb-2">
-            Accede desde la tienda
-          </h2>
-          <p className="text-neutral-600 mb-6">
+      <div className={`${labStyles.shell} ${labStyles.lightScreen}`}>
+        <div className={labStyles.centerContent}>
+          <p className={labStyles.eyebrow}>Beta Skintech / Clara</p>
+          <h1 className={labStyles.permissionTitle}>Accede desde la tienda</h1>
+          <p className={labStyles.subtitle}>
             {error ||
               "Para usar Clara, ingresa a tu cuenta en BetaSkintech y accede desde ahi."}
           </p>
-          <a
-            href="https://betaskintech.com/account"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center px-6 py-3 btn-ios-primary rounded-2xl shadow-md font-medium"
-          >
-            <svg
-              className="w-5 h-5 mr-2"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
+          <div className={labStyles.recapActions}>
+            <a
+              href="https://betaskintech.com/account"
+              target="_blank"
+              rel="noopener noreferrer"
+              className={labStyles.primaryButton}
             >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"
-              />
-            </svg>
-            Ir a BetaSkintech
-          </a>
-          <p className="mt-4 text-sm text-neutral-500 font-medium">
+              <svg
+                className="w-5 h-5 mr-2"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"
+                />
+              </svg>
+              Ir a BetaSkintech
+            </a>
+          </div>
+          <p className={labStyles.recapMeta}>
             Una vez en tu cuenta, busca el enlace a Clara
           </p>
         </div>

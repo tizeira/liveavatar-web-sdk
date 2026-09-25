@@ -34,7 +34,8 @@ import type { ClaraCatalogProduct } from "../shopify/types";
 import { routineGoalsText } from "../consultations/routine";
 import { releaseConsultation } from "../consultations/release";
 import styles from "./ClaraVoiceAgent.module.css";
-import { SavedRoutinePanel } from "./SavedRoutinePanel";
+import { SavedRoutinePanel, SavedRoutineStatus } from "./SavedRoutinePanel";
+import { ShopifyVerificationStates } from "./ShopifyVerificationStates";
 
 // Debug (solo preview/develop)
 import { MobileLogger } from "./debug/MobileLogger";
@@ -50,6 +51,7 @@ import {
   MessageSquare,
   Bug,
   ChevronLeft,
+  ArrowUpRight,
 } from "lucide-react";
 
 // Toast notifications
@@ -229,6 +231,9 @@ const VoiceControls: React.FC<VoiceControlsProps> = ({
 // LANDING SCREEN COMPONENT (shadcn/ui redesign)
 // ============================================
 interface LandingScreenProps {
+  /** Local design preview only; never bypasses microphone permission in production. */
+  previewPermission?: "request" | "denied";
+  designOnly?: boolean;
   onViewSavedRoutine?: () => void;
   onStartCall: () => Promise<void>;
   isLoading: boolean;
@@ -238,7 +243,9 @@ interface LandingScreenProps {
   rateLimitCountdown?: number;
 }
 
-const LandingScreen: React.FC<LandingScreenProps> = ({
+export const LandingScreen: React.FC<LandingScreenProps> = ({
+  previewPermission,
+  designOnly = false,
   onViewSavedRoutine,
   onStartCall,
   isLoading,
@@ -248,11 +255,22 @@ const LandingScreen: React.FC<LandingScreenProps> = ({
   rateLimitCountdown = 0,
 }) => {
   const displayName = customerData?.firstName || userName;
-  const [showPermission, setShowPermission] = useState(false);
-  const [permissionDenied, setPermissionDenied] = useState(false);
+  const [showPermission, setShowPermission] = useState(
+    process.env.NODE_ENV !== "production" && Boolean(previewPermission),
+  );
+  const [permissionDenied, setPermissionDenied] = useState(
+    process.env.NODE_ENV !== "production" && previewPermission === "denied",
+  );
+  const screenRef = useClaraScreenFocus(
+    showPermission ? "permission" : "welcome",
+  );
 
   const requestMicrophone = async () => {
     setPermissionDenied(false);
+    if (process.env.NODE_ENV !== "production" && designOnly) {
+      await onStartCall();
+      return;
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       stream.getTracks().forEach((track) => track.stop());
@@ -264,7 +282,10 @@ const LandingScreen: React.FC<LandingScreenProps> = ({
   };
 
   return (
-    <div className={styles.lightScreen}>
+    <div
+      ref={screenRef}
+      className={`${styles.lightScreen} ${!showPermission ? styles.welcomeScreen : ""}`}
+    >
       <BrandMark className={styles.topBrand} />
       {showPermission && (
         <button
@@ -280,14 +301,7 @@ const LandingScreen: React.FC<LandingScreenProps> = ({
         </button>
       )}
 
-      <main
-        className={styles.centerContent}
-        style={
-          !showPermission && onViewSavedRoutine
-            ? { paddingBottom: 200 }
-            : undefined
-        }
-      >
+      <main className={styles.centerContent}>
         {showPermission ? (
           <>
             <div
@@ -299,46 +313,39 @@ const LandingScreen: React.FC<LandingScreenProps> = ({
                 {permissionDenied ? <MicOff size={34} /> : <Mic size={34} />}
               </div>
             </div>
-            <h1 className={`${styles.permissionTitle} ${styles.display}`}>
+            <h1
+              tabIndex={-1}
+              className={`${styles.permissionTitle} ${styles.display}`}
+            >
               {permissionDenied
-                ? "Sin micrófono no puedo escucharte"
-                : "Para conversar con Clara necesitamos acceso a tu micrófono"}
+                ? "Activa tu micrófono"
+                : "Hablemos de tu piel."}
             </h1>
             <p className={styles.subtitle}>
               {permissionDenied
-                ? "Activá el permiso del micrófono en tu navegador y volvé a intentarlo."
-                : "Solo se usa mientras hablás con ella. Podés silenciarlo en cualquier momento."}
+                ? "Permite el acceso en tu navegador y vuelve a intentarlo."
+                : "Permite el micrófono para conversar. Puedes silenciarlo cuando quieras."}
             </p>
           </>
         ) : (
           <>
-            <div className={styles.portraitHalo}>
-              <div className={styles.portraitDisc}>
-                <ClaraPortrait />
-              </div>
-            </div>
-            <h1 className={`${styles.title} ${styles.display}`}>
-              {displayName ? `Hola, ${displayName}` : "Hola, soy Clara"}
+            <p className={styles.eyebrow}>Clara / Asesoría personal</p>
+            <p className={styles.greeting}>
+              {displayName ? `Hola, ${displayName}.` : "Hola, soy Clara."}
+            </p>
+            <h1 tabIndex={-1} className={`${styles.title} ${styles.display}`}>
+              Tu cuidado,
+              <br />
+              más simple.
             </h1>
             <p className={styles.subtitle}>
-              Tu asesora virtual de skincare. Conversemos sobre tu piel y cómo
-              aprovechar mejor tus productos.
+              Conversemos sobre tu piel y los productos que van contigo.
             </p>
           </>
         )}
       </main>
 
       <div className={styles.bottomActions}>
-        {!showPermission && onViewSavedRoutine && (
-          <button
-            type="button"
-            className={styles.secondaryButton}
-            onClick={onViewSavedRoutine}
-            disabled={isLoading}
-          >
-            Mi rutina guardada
-          </button>
-        )}
         <button
           type="button"
           className={styles.primaryButton}
@@ -350,17 +357,41 @@ const LandingScreen: React.FC<LandingScreenProps> = ({
           {isLoading
             ? "Conectando con Clara…"
             : isRateLimited
-              ? `Volvé a intentar en ${rateLimitCountdown}s`
+              ? `Intenta de nuevo en ${rateLimitCountdown}s`
               : showPermission
                 ? permissionDenied
                   ? "Volver a pedir permiso"
                   : "Permitir micrófono"
                 : "Hablar con Clara"}
         </button>
+        {!showPermission && (
+          <p className={styles.actionNote}>
+            Asesoría de cuidado de la piel con IA.
+          </p>
+        )}
         {isRateLimited && (
           <p className={styles.errorNote}>
             Alcanzaste el límite temporal de sesiones.
           </p>
+        )}
+        {!showPermission && onViewSavedRoutine && (
+          <button
+            type="button"
+            className={styles.routineEntry}
+            onClick={onViewSavedRoutine}
+            disabled={isLoading}
+          >
+            <span>
+              <span className={styles.eyebrow}>Tu cuidado diario</span>
+              <span className={styles.routineEntryTitle}>
+                Mi rutina guardada
+              </span>
+              <span className={styles.routineEntryCopy}>
+                Consulta tus productos y pasos.
+              </span>
+            </span>
+            <ArrowUpRight size={22} aria-hidden="true" />
+          </button>
         )}
       </div>
     </div>
@@ -1232,11 +1263,26 @@ const SessionWrapper: React.FC<SessionWrapperProps> = ({
 
 type RecapView = "preparing" | "summary" | "routine";
 
+// Reset presentation focus between screens without remounting the media session.
+function useClaraScreenFocus(view: string) {
+  const screenRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const screen = screenRef.current;
+    // Do not scroll an embedding Shopify page when the UI is inside an iframe.
+    window.scrollTo({ top: 0, behavior: "instant" });
+    screen?.parentElement?.scrollTo({ top: 0, behavior: "instant" });
+    screen
+      ?.querySelector<HTMLHeadingElement>("h1")
+      ?.focus({ preventScroll: true });
+  }, [view]);
+  return screenRef;
+}
+
 function formatCatalogPrice(product: ClaraCatalogProduct): string | null {
   if (!product.price) return null;
   const amount = Number(product.price.amount);
   if (!Number.isFinite(amount)) return null;
-  return new Intl.NumberFormat("es-AR", {
+  return new Intl.NumberFormat("es-CL", {
     style: "currency",
     currency: product.price.currencyCode,
     maximumFractionDigits: amount % 1 === 0 ? 0 : 2,
@@ -1285,7 +1331,9 @@ const RoutineProductCard: React.FC<{ product: ClaraCatalogProduct }> = ({
             {compareAtPrice && <em>Oferta</em>}
           </span>
         )}
-        <span className={styles.productLink}>Ver producto</span>
+        <span className={styles.productLink}>
+          Ver producto <ArrowUpRight size={14} aria-hidden="true" />
+        </span>
       </div>
     </a>
   );
@@ -1319,15 +1367,24 @@ export const SessionRecap: React.FC<SessionRecapProps> = ({
   const minutes = Math.max(1, Math.round(durationSeconds / 60));
   const product = customerData?.lastOrderProduct;
   const hasRoutine = Boolean(result?.routine?.steps.length);
+  const screenRef = useClaraScreenFocus(view);
 
   if (view === "preparing") {
     return (
-      <div className={styles.lightScreen} role="status" aria-live="polite">
+      <div
+        ref={screenRef}
+        className={styles.lightScreen}
+        role="status"
+        aria-live="polite"
+      >
         <div className={styles.centerContent}>
           <div className={styles.preparingDot} />
-          <p className={`${styles.connectingLabel} ${styles.display}`}>
+          <h1
+            tabIndex={-1}
+            className={`${styles.connectingLabel} ${styles.display}`}
+          >
             {processingError || "Preparando tu resumen…"}
-          </p>
+          </h1>
           {processingError && (
             <button
               type="button"
@@ -1345,7 +1402,7 @@ export const SessionRecap: React.FC<SessionRecapProps> = ({
   if (view === "routine") {
     const routine = savedRoutine || result?.routine;
     return (
-      <div className={styles.recapScreen}>
+      <div ref={screenRef} className={styles.recapScreen}>
         <div className={styles.recapInner}>
           <button
             type="button"
@@ -1357,6 +1414,7 @@ export const SessionRecap: React.FC<SessionRecapProps> = ({
           </button>
           <BrandMark className={styles.topBrand} />
           <h1
+            tabIndex={-1}
             className={`${styles.recapTitle} ${styles.display}`}
             style={{ marginTop: 28 }}
           >
@@ -1367,41 +1425,43 @@ export const SessionRecap: React.FC<SessionRecapProps> = ({
               ? savedConsultationDate
                 ? `Rutina de la consulta del ${new Intl.DateTimeFormat("es-AR", { timeZone: "America/Argentina/Buenos_Aires", dateStyle: "long" }).format(new Date(savedConsultationDate))}`
                 : "Tu última rutina guardada"
-              : "Próximos pasos para tu consulta"}
+              : "Tus productos. Paso a paso."}
           </p>
           {savedRoutine && (
             <p className={styles.recapMeta}>
-              Precio y disponibilidad: ver producto.
+              Consulta precio y disponibilidad en la tienda.
             </p>
           )}
           <div className={styles.recapCard}>
             <div className={styles.eyebrow}>Objetivos conversados</div>
             <p className={styles.recapText}>{routineGoalsText(routine)}</p>
           </div>
-          {routine?.steps.map((step, index) => (
-            <div
-              className={styles.recapCard}
-              key={`${step.moment}-${step.order}-${index}`}
-            >
-              <div className={styles.eyebrow}>
-                {step.moment === "morning"
-                  ? "Mañana"
-                  : step.moment === "evening"
-                    ? "Noche"
-                    : step.moment === "morning_evening"
-                      ? "Mañana y noche"
-                      : "Semanal"}{" "}
-                · Paso {step.order}
-              </div>
-              <p className={styles.recapText}>{step.instruction}</p>
-              {step.frequency && (
-                <p className={styles.recapMeta}>{step.frequency}</p>
-              )}
-              {step.product?.url && (
-                <RoutineProductCard product={step.product} />
-              )}
-            </div>
-          ))}
+          <ol className={styles.routineSteps} aria-label="Pasos de tu rutina">
+            {routine?.steps.map((step, index) => (
+              <li
+                className={styles.routineStep}
+                key={`${step.moment}-${step.order}-${index}`}
+              >
+                <div className={styles.eyebrow}>
+                  {step.moment === "morning"
+                    ? "Mañana"
+                    : step.moment === "evening"
+                      ? "Noche"
+                      : step.moment === "morning_evening"
+                        ? "Mañana y noche"
+                        : "Semanal"}{" "}
+                  · Paso {step.order}
+                </div>
+                {step.product?.url && (
+                  <RoutineProductCard product={step.product} />
+                )}
+                <p className={styles.recapText}>{step.instruction}</p>
+                {step.frequency && (
+                  <p className={styles.recapMeta}>{step.frequency}</p>
+                )}
+              </li>
+            ))}
+          </ol>
           {routine?.cautions.map((caution) => (
             <div className={styles.recapCard} key={caution}>
               <div className={styles.eyebrow}>A tener en cuenta</div>
@@ -1423,9 +1483,11 @@ export const SessionRecap: React.FC<SessionRecapProps> = ({
   }
 
   return (
-    <div className={styles.recapScreen}>
+    <div ref={screenRef} className={styles.recapScreen}>
       <div className={styles.recapInner}>
-        <h1 className={`${styles.recapTitle} ${styles.display}`}>
+        <BrandMark className={styles.topBrand} />
+        <p className={styles.eyebrow}>Consulta finalizada</p>
+        <h1 tabIndex={-1} className={`${styles.recapTitle} ${styles.display}`}>
           Tu conversación con Clara
         </h1>
         <p className={styles.recapMeta}>Hoy · {minutes} min</p>
@@ -1447,7 +1509,7 @@ export const SessionRecap: React.FC<SessionRecapProps> = ({
             <div className={styles.eyebrow}>Rutina de esta consulta</div>
             <p className={styles.recapText}>
               Esta consulta no tiene una nueva rutina guardada. Si ya guardaste
-              una anteriormente, podés consultarla en «Mi rutina guardada».
+              una anteriormente, puedes consultarla en «Mi rutina guardada».
             </p>
           </div>
         )}
@@ -1518,19 +1580,207 @@ const designPreviewResult: ClaraConsultationResult = {
   transcript: [],
   routine: {
     concerns: ["Hidratación", "Sensibilidad"],
-    cautions: ["Introducí un producto nuevo por vez y usá protector solar."],
+    cautions: ["Introduce un producto nuevo por vez."],
     steps: [
       {
         moment: "morning",
         order: 1,
-        instruction:
-          "Aplicá la rutina indicada por Clara sobre la piel limpia.",
+        instruction: "Aplica sobre la piel limpia, antes de tu hidratante.",
         frequency: "Todos los días",
-        product: null,
+        product: {
+          id: "demo-radiance",
+          title: "iD Radiance",
+          handle: "demo-radiance",
+          url: "#producto-demo",
+          imageUrl: null,
+          imageAlt: null,
+          availableForSale: true,
+          price: null,
+          compareAtPrice: null,
+          description: "",
+          companionCondition: null,
+          companionProducts: [],
+        },
+      },
+      {
+        moment: "morning_evening",
+        order: 2,
+        instruction: "Aplica tu hidratante en rostro y cuello.",
+        product: {
+          id: "demo-hidra",
+          title: "Beta Hidra",
+          handle: "demo-hidra",
+          url: "#producto-demo",
+          imageUrl: null,
+          imageAlt: null,
+          availableForSale: true,
+          price: null,
+          compareAtPrice: null,
+          description: "",
+          companionCondition: null,
+          companionProducts: [],
+        },
       },
     ],
   },
 };
+
+/** Visual sandbox: fixture data only, no media session or persistence requests. */
+export function ClaraDesignPreview({
+  initialView = "welcome",
+}: {
+  initialView?: string;
+}) {
+  const [view, setView] = useState(initialView);
+  const [muted, setMuted] = useState(false);
+  if (view === "board") {
+    return (
+      <main className={`${styles.shell} ${styles.previewBoard}`}>
+        <header>
+          <p className={styles.eyebrow}>Beta Skintech / Dirección visual</p>
+          <h1 className={styles.recapTitle}>Clara. Diseño Lab.</h1>
+          <p className={styles.recapMeta}>
+            Demo local con datos de ejemplo. No inicia llamadas ni guarda
+            cambios.
+          </p>
+          <a className={styles.productLink} href="?design_preview=welcome">
+            Abrir el recorrido a pantalla completa <ArrowUpRight size={14} />
+          </a>
+        </header>
+        <div className={styles.previewBoardGrid}>
+          <section>
+            <h2 className={styles.eyebrow}>01 / Inicio</h2>
+            <iframe
+              title="Inicio móvil de Clara"
+              src="?design_preview=welcome"
+            />
+          </section>
+          <section>
+            <h2 className={styles.eyebrow}>02 / Mi rutina</h2>
+            <iframe
+              title="Rutina móvil de Clara"
+              src="?design_preview=routine"
+            />
+          </section>
+        </div>
+      </main>
+    );
+  }
+  const views = [
+    ["welcome", "Inicio"],
+    ["permission", "Micrófono"],
+    ["denied", "Sin permiso"],
+    ["connecting", "Conexión"],
+    ["call", "Llamada"],
+    ["preparing", "Procesando"],
+    ["summary", "Resumen"],
+    ["routine", "Rutina"],
+    ["limited", "Límite"],
+    ["empty", "Sin rutina"],
+    ["routine-error", "Error"],
+    ["access", "Acceso"],
+  ];
+  return (
+    <div className={`${styles.shell} ${styles.previewFrame}`}>
+      <nav className={styles.previewNav} aria-label="Pantallas de demostración">
+        <strong>LAB · Demo sin llamadas</strong>
+        {views.map(([id, label]) => (
+          <a
+            key={id}
+            href={`?design_preview=${id}`}
+            aria-current={view === id ? "page" : undefined}
+          >
+            {label}
+          </a>
+        ))}
+      </nav>
+      {view === "access" ? (
+        <ShopifyVerificationStates state="loading" />
+      ) : view === "empty" || view === "routine-error" ? (
+        <SavedRoutineStatus
+          loaded={view === "empty"}
+          error={
+            view === "routine-error"
+              ? "No pudimos recuperar tu rutina. Intenta nuevamente; esto no significa que se haya borrado."
+              : null
+          }
+          onBack={() => setView("welcome")}
+          onRetry={() => setView("routine")}
+        />
+      ) : view === "connecting" ? (
+        <ConnectingScreen />
+      ) : view === "call" ? (
+        <div className={styles.darkScreen}>
+          <div className={styles.callStage}>
+            <div className={styles.videoFrame}>
+              {/* Local portrait is a placeholder, not a live stream. */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                className={styles.previewPortrait}
+                src="/clara-avatar.png"
+                alt="Vista de ejemplo de Clara, sin videollamada activa"
+              />
+            </div>
+            <div className={styles.callHeader}>
+              <div className={styles.timerPill}>02:14</div>
+              <BrandMark dark className={styles.callBrand} />
+              <span />
+            </div>
+            <div className={styles.statusWrap}>
+              <span className={styles.statusPill}>
+                {muted ? "Silenciado" : "Escuchando · Demo"}
+              </span>
+            </div>
+            <div className={styles.controls}>
+              <button
+                className={`${styles.roundControl} ${styles.muteControl} ${muted ? styles.mutedControl : ""}`}
+                onClick={() => setMuted(!muted)}
+                aria-label={muted ? "Activar micrófono" : "Silenciar micrófono"}
+                aria-pressed={muted}
+              >
+                {muted ? <MicOff /> : <Mic />}
+              </button>
+              <button
+                className={`${styles.roundControl} ${styles.endControl}`}
+                onClick={() => setView("summary")}
+                aria-label="Finalizar conversación"
+              >
+                <PhoneOff />
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : ["preparing", "summary", "routine"].includes(view) ? (
+        <SessionRecap
+          view={view as RecapView}
+          durationSeconds={364}
+          result={designPreviewResult}
+          onViewChange={setView}
+          onTalkAgain={() => setView("welcome")}
+          onViewSavedRoutine={() => setView("routine")}
+        />
+      ) : (
+        <LandingScreen
+          key={view}
+          designOnly
+          previewPermission={
+            view === "permission"
+              ? "request"
+              : view === "denied"
+                ? "denied"
+                : undefined
+          }
+          userName="Ana"
+          isLoading={false}
+          isRateLimited={view === "limited"}
+          rateLimitCountdown={45}
+          onStartCall={async () => setView("call")}
+          onViewSavedRoutine={() => setView("routine")}
+        />
+      )}
+    </div>
+  );
+}
 
 export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
   userName = null,
@@ -1790,92 +2040,19 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
       : {};
 
   if (process.env.NODE_ENV !== "production" && designPreview) {
-    if (designPreview === "welcome") {
-      return (
-        <div className={styles.shell}>
-          <LandingScreen
-            onStartCall={async () => {}}
-            isLoading={false}
-            userName={userName}
-            customerData={customerData}
-          />
-        </div>
-      );
-    }
-    if (designPreview === "connecting") {
-      return (
-        <div className={styles.shell}>
-          <ConnectingScreen />
-        </div>
-      );
-    }
-    if (
-      designPreview === "preparing" ||
-      designPreview === "summary" ||
-      designPreview === "routine"
-    ) {
-      return (
-        <div className={styles.shell}>
-          <SessionRecap
-            view={designPreview}
-            durationSeconds={364}
-            customerData={customerData}
-            result={designPreviewResult}
-            onViewChange={() => {}}
-            onTalkAgain={() => {}}
-          />
-        </div>
-      );
-    }
-    if (designPreview === "call") {
-      return (
-        <div className={`${styles.shell} ${styles.darkScreen}`}>
-          <div className={styles.callStage}>
-            <div className={styles.callHeader}>
-              <div className={styles.timerPill}>
-                <span className={styles.recordDot} />
-                02:14
-              </div>
-              <BrandMark dark className={styles.callBrand} />
-              <span />
-            </div>
-            <div className={styles.videoFrame}>
-              <div aria-label="El video en vivo de Clara ocupa este espacio" />
-            </div>
-            <div className={styles.statusWrap}>
-              <div className={styles.statusPill}>
-                <span className={styles.voiceBars}>
-                  <span />
-                  <span />
-                  <span />
-                </span>
-                Hablando
-              </div>
-            </div>
-            <div className={styles.controls}>
-              <button
-                type="button"
-                className={`${styles.roundControl} ${styles.muteControl}`}
-                aria-label="Silenciar micrófono"
-              >
-                <Mic size={27} />
-              </button>
-              <button
-                type="button"
-                className={`${styles.roundControl} ${styles.endControl}`}
-                aria-label="Finalizar conversación"
-              >
-                <PhoneOff size={27} />
-              </button>
-            </div>
-          </div>
-        </div>
-      );
-    }
+    return <ClaraDesignPreview initialView={designPreview} />;
   }
 
   return (
-    <div className={styles.shell} style={containerStyle}>
+    <div
+      className={styles.shell}
+      style={{
+        ...containerStyle,
+        ...(fixedHeight && isInIframe && !sessionToken
+          ? { overflow: "auto" }
+          : {}),
+      }}
+    >
       {error && (
         <div className="absolute top-4 left-4 right-4 z-50 bg-red-100 border border-red-300 text-red-700 px-4 py-3 rounded-lg">
           <p className="text-sm">{error}</p>

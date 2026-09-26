@@ -20,16 +20,18 @@ export function validateBootstrapTarget(env) {
   validatePreviewTarget(env);
   const pooled = new URL(env.POSTGRES_PRISMA_URL);
   const direct = new URL(env.POSTGRES_URL_NON_POOLING);
-  if (
-    direct.hostname.split(".")[0].endsWith("-pooler") ||
-    direct.pathname !== "/neondb" ||
-    pooled.pathname !== direct.pathname ||
-    direct.username !== pooled.username ||
-    env.VERCEL_GIT_COMMIT_REF !== "codex/clara-lab-design-2026-09-25" ||
-    env.CLARA_QA_CATALOG_BOOTSTRAP !== "authorized-2026-09-26" ||
-    env.SHOPIFY_STORE_DOMAIN !== "289f72-45.myshopify.com"
-  ) {
-    throw new Error("PREVIEW_BOOTSTRAP_SCOPE_MISMATCH");
+  const checks = {
+    DIRECT_CONNECTION: !direct.hostname.split(".")[0].endsWith("-pooler"),
+    DATABASE_NAME:
+      direct.pathname === "/neondb" && pooled.pathname === direct.pathname,
+    DATABASE_ROLE: direct.username === pooled.username,
+    SOURCE_BRANCH:
+      env.VERCEL_GIT_COMMIT_REF === "codex/clara-lab-design-2026-09-25",
+    AUTHORIZATION: env.CLARA_QA_CATALOG_BOOTSTRAP === "authorized-2026-09-26",
+    SHOPIFY_STORE: env.SHOPIFY_STORE_DOMAIN === "289f72-45.myshopify.com",
+  };
+  for (const [check, valid] of Object.entries(checks)) {
+    if (!valid) throw new Error(`PREVIEW_SCOPE_${check}_MISMATCH`);
   }
 }
 

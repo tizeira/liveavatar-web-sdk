@@ -10,7 +10,7 @@ const env = {
     "postgresql://fake@ep-dark-moon-a4ec9v5b-pooler.test.neon.tech/neondb",
   POSTGRES_URL_NON_POOLING:
     "postgresql://fake@ep-dark-moon-a4ec9v5b.test.neon.tech/neondb",
-  VERCEL_GIT_COMMIT_REF: "codex/clara-lab-design-2026-09-25",
+  CLARA_QA_SOURCE_REF: "codex/clara-lab-design-2026-09-25",
   CLARA_QA_CATALOG_BOOTSTRAP: "authorized-2026-09-26",
   SHOPIFY_STORE_DOMAIN: "289f72-45.myshopify.com",
 };
@@ -27,7 +27,7 @@ test("bootstrap rejects production, absent approval, other branch, database, rol
   for (const override of [
     { VERCEL_ENV: "production" },
     { CLARA_QA_CATALOG_BOOTSTRAP: undefined },
-    { VERCEL_GIT_COMMIT_REF: "main" },
+    { CLARA_QA_SOURCE_REF: "main" },
     { SHOPIFY_STORE_DOMAIN: "other.myshopify.com" },
     { POSTGRES_URL_NON_POOLING: env.POSTGRES_PRISMA_URL },
     {

@@ -26,7 +26,7 @@ export function validateBootstrapTarget(env) {
       direct.pathname === "/neondb" && pooled.pathname === direct.pathname,
     DATABASE_ROLE: direct.username === pooled.username,
     SOURCE_BRANCH:
-      env.VERCEL_GIT_COMMIT_REF === "codex/clara-lab-design-2026-09-25",
+      env.CLARA_QA_SOURCE_REF === "codex/clara-lab-design-2026-09-25",
     AUTHORIZATION: env.CLARA_QA_CATALOG_BOOTSTRAP === "authorized-2026-09-26",
     SHOPIFY_STORE: env.SHOPIFY_STORE_DOMAIN === "289f72-45.myshopify.com",
   };

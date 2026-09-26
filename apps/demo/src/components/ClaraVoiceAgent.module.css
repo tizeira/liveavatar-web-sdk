@@ -1,4 +1,44 @@
 /* LAB: warm paper, ink, and a single editorial grid. Scoped to Clara. */
+.pageSurface {
+  min-height: 100dvh;
+  background: #f7f6f2;
+}
+:global(html):has(.darkScreen),
+:global(body):has(.darkScreen),
+.pageSurface:has(.darkScreen) {
+  background: #252723;
+}
+.accountDock {
+  position: fixed;
+  top: calc(16px + env(safe-area-inset-top, 0px));
+  right: max(12px, env(safe-area-inset-right, 0px));
+  z-index: 50;
+}
+.accountDock .accountMenu {
+  color: #20201e;
+  background: rgb(255 255 255 / 12%);
+  border: 1px solid rgb(255 255 255 / 28%);
+  backdrop-filter: blur(16px) saturate(125%);
+  -webkit-backdrop-filter: blur(16px) saturate(125%);
+  box-shadow: 0 2px 12px rgb(0 0 0 / 8%);
+  padding: 0 4px;
+  gap: 2px;
+}
+.accountMenu > span:nth-child(2) {
+  display: none;
+}
+.accountMenu button {
+  color: inherit;
+  min-width: 44px;
+  min-height: 44px;
+  display: grid;
+  place-items: center;
+  margin: 0;
+}
+.pageSurface:has(.darkScreen) .accountMenu {
+  color: #fff;
+  background: rgb(20 22 19 / 16%);
+}
 .shell {
   --clara-ink: #20201e;
   --clara-muted: #64635e;
@@ -32,7 +72,7 @@
 }
 .lightScreen {
   background: var(--clara-paper);
-  padding: 96px 0 0;
+  padding: calc(96px + env(safe-area-inset-top, 0px)) 0 0;
 }
 .darkScreen {
   background: #252723;
@@ -148,12 +188,19 @@
     color 160ms ease;
 }
 .primaryButton {
-  color: #fff;
-  background: var(--clara-ink);
-  border-color: var(--clara-ink);
+  color: var(--clara-ink);
+  background: rgb(255 255 255 / 14%);
+  border-color: rgb(32 32 30 / 24%);
 }
 .primaryButton:hover:not(:disabled) {
-  background: #41413b;
+  background: rgb(255 255 255 / 30%);
+}
+.primaryButton,
+.secondaryButton,
+.backButton {
+  backdrop-filter: blur(14px) saturate(120%);
+  -webkit-backdrop-filter: blur(14px) saturate(120%);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 35%);
 }
 .secondaryButton {
   background: transparent;
@@ -331,10 +378,13 @@
   padding: 8px 12px;
   font-size: 12px;
   line-height: 1.5;
-  background: #252723e8;
+  background: rgb(20 22 19 / 22%);
   border: 1px solid #ffffff33;
-  border-radius: 4px;
+  border-radius: 999px;
   color: #fff;
+  backdrop-filter: blur(16px) saturate(125%);
+  -webkit-backdrop-filter: blur(16px) saturate(125%);
+  text-shadow: 0 1px 3px rgb(0 0 0 / 65%);
 }
 .timerPill {
   font-variant-numeric: tabular-nums;
@@ -386,7 +436,7 @@
   align-items: center;
   justify-content: center;
   gap: 24px;
-  background: linear-gradient(transparent, #141611bf);
+  background: linear-gradient(transparent, rgb(20 22 17 / 25%));
 }
 .roundControl {
   display: grid;
@@ -397,18 +447,37 @@
   border: 1px solid #ffffff50;
   cursor: pointer;
   color: #fff;
+  backdrop-filter: blur(16px) saturate(125%);
+  -webkit-backdrop-filter: blur(16px) saturate(125%);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 18%),
+    0 4px 16px rgb(0 0 0 / 12%);
+  transition:
+    background-color 160ms ease,
+    transform 160ms ease;
 }
 .muteControl {
-  background: #252723;
+  background: rgb(20 22 19 / 18%);
 }
 .mutedControl {
-  background: #f7f6f2;
-  color: #20201e;
-  border-color: #f7f6f2;
+  background: rgb(255 255 255 / 24%);
+  color: #fff;
+  border-color: rgb(255 255 255 / 65%);
 }
 .endControl {
-  background: #a63226;
-  border-color: #a63226;
+  background: rgb(166 50 38 / 24%);
+  border-color: rgb(255 179 169 / 55%);
+}
+.roundControl:active {
+  transform: scale(0.96);
+}
+@media (hover: hover) {
+  .roundControl:hover:not(:disabled) {
+    background: rgb(255 255 255 / 28%);
+  }
+  .endControl:hover:not(:disabled) {
+    background: rgb(166 50 38 / 42%);
+  }
 }
 .roundControl:disabled {
   opacity: 0.5;
@@ -418,7 +487,8 @@
   min-height: 100dvh;
   position: relative;
   background: var(--clara-paper);
-  padding: 116px 28px max(36px, env(safe-area-inset-bottom));
+  padding: calc(116px + env(safe-area-inset-top, 0px)) 28px
+    max(36px, env(safe-area-inset-bottom));
 }
 .recapInner {
   max-width: 580px;
@@ -656,7 +726,7 @@
     transform: rotate(360deg);
   }
 }
-@media (min-width: 760px) {
+@media (min-width: 760px) and (min-height: 600px) {
   .welcomeScreen .centerContent {
     padding-top: 72px;
   }
@@ -674,6 +744,38 @@
   }
   .previewFrame .callStage {
     height: min(800px, calc(100dvh - 140px));
+  }
+}
+@media (max-height: 599px) and (orientation: landscape) {
+  .connectingContent {
+    padding: 80px 24px 24px;
+  }
+  .connectingPortrait {
+    width: 56px;
+    height: 70px;
+    margin-bottom: 0;
+  }
+  .controls {
+    height: 110px;
+    padding-top: 16px;
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
+  }
+  .callHeader {
+    left: max(20px, env(safe-area-inset-left));
+    right: max(20px, env(safe-area-inset-right));
+  }
+}
+@supports not (
+  (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))
+) {
+  .timerPill,
+  .statusPill,
+  .muteControl,
+  .mutedControl {
+    background: rgb(20 22 19 / 65%);
+  }
+  .endControl {
+    background: rgb(166 50 38 / 70%);
   }
 }
 @media (max-width: 360px) {

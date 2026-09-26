@@ -461,10 +461,10 @@ export default function Home() {
 
   // Verified - show Clara
   return (
-    <div className="min-h-screen">
+    <div className={labStyles.pageSurface}>
       {/* User menu for logout */}
-      <div className="fixed top-4 right-4 z-50">
-        <UserMenu />
+      <div className={labStyles.accountDock}>
+        <UserMenu className={labStyles.accountMenu} />
       </div>
       <ClaraVoiceAgent
         userName={customerData?.firstName || session?.user?.name || null}

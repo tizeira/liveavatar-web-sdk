@@ -1,4 +1,5 @@
 import React from "react";
+import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LandingScreen, SessionRecap } from "@/src/components/ClaraVoiceAgent";
@@ -9,6 +10,19 @@ const actions = { onTalkAgain: vi.fn(), onViewChange: vi.fn() };
 afterEach(() => vi.unstubAllEnvs());
 
 describe("Clara LAB presentation contracts", () => {
+  it("keeps the outer viewport aligned with the dynamic call height", () => {
+    const layout = readFileSync(
+      new URL("../../../app/layout.tsx", import.meta.url),
+      "utf8",
+    );
+    const page = readFileSync(
+      new URL("../../../app/page.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(layout).toContain('className="min-h-dvh bg-[#f7f6f2] antialiased"');
+    expect(page).toContain("className={labStyles.pageSurface}");
+    expect(page).not.toContain('className="min-h-screen"');
+  });
   it("prioritizes conversation, with one independent saved routine entry", () => {
     const html = renderToStaticMarkup(
       <LandingScreen

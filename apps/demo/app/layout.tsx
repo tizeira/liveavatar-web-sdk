@@ -23,7 +23,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="es">
-      <body className="min-h-screen antialiased">
+      <body className="min-h-dvh bg-[#f7f6f2] antialiased">
         <SessionProvider>{children}</SessionProvider>
         <Toaster position="top-center" richColors />
         <OutageBanner />

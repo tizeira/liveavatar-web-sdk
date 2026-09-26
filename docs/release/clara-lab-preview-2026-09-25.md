@@ -70,3 +70,53 @@ Autorizar únicamente la migración aditiva 20260922010000_add_clara_catalog y l
 sincronización inicial del catálogo sobre la rama QA confirmada. Después:
 repetir preflight/build, verificar aislamiento y protecciones, y mover sólo
 testers si todo pasa. Producción, Shopify y ElevenLabs continúan fuera de alcance.
+
+## Continuación autorizada: 2026-09-26
+
+El usuario autorizó la migración del catálogo y la sincronización inicial sólo
+en QA. Se reutilizó el endpoint ep-dark-moon-a4ec9v5b; no se crearon ramas ni
+se descargaron credenciales. Producción mantuvo dpl_9YX7sMRM9huyjpGPUmCGTiX24Dqf.
+
+Se añadieron los scripts bootstrap-preview-catalog.mjs y
+bootstrap-preview-catalog-sync.ts con pruebas aisladas. El comando exige
+Preview, endpoint QA exacto en ambas conexiones, conexión directa no pooled,
+base/rol coincidentes, tienda esperada y marcadores explícitos de operación.
+Verifica las migraciones locales, core ya aplicado, ausencia de migraciones
+fallidas y hash del SQL autorizado antes de ejecutar prisma migrate deploy.
+No modifica consultas/rutinas. La sincronización rechaza snapshot vacío y usa
+el lector Shopify y el escritor transaccional del catálogo existentes.
+
+Dos builds iniciales se detuvieron antes de escribir por falta de la variable
+automática de rama en CLI. Se reemplazó por un marcador build-only, pasando la
+rama Git comprobada previamente; no se cambiaron variables permanentes.
+Un intento con comando largo fue rechazado antes de crear deployment.
+
+Bootstrap confirmado en dpl_DQyobDBMb7Da5ZoLbuJNoXX6xF1g, SHA b12a2b7:
+- migrationApplied: 20260922010000_add_clara_catalog.
+- productCount: 11; searchVerified: true (fetch bloqueado durante la búsqueda).
+- preflight: matchesQaBranch=true, ready=true, migrationReady=true,
+  catalogCount=11, catalogInitialized=true.
+- 8 pruebas Node de guards/preflight y 4 pruebas Vitest de sincronización pasan.
+- Revisión independiente read-only sin bloqueos; sin escalación de modelo.
+
+Config de operación ignorada .vercel/lab-bootstrap-preview.json:
+`node scripts/bootstrap-preview-catalog.mjs && node scripts/preflight-preview.mjs && cd ../.. && pnpm --filter @heygen/liveavatar-web-sdk build && pnpm --filter demo build`
+
+Se invocó con target preview y dos build-env no secretos:
+CLARA_QA_SOURCE_REF=codex/clara-lab-design-2026-09-25 y
+CLARA_QA_CATALOG_BOOTSTRAP=authorized-2026-09-26.
+
+El deployment final dpl_F2ZSKoGYvV46cTGaEq43ZgGVD6GK usa el mismo SHA,
+la configuración normal lab-preview.json (preflight read-only) y no recibe
+los marcadores bootstrap. El corte de testers queda condicionado a READY y smoke.
+
+Este candidato quedó READY. Smoke aislado: raíz y design_preview redirigen al
+acceso protegido (307); cron y rutina sin credenciales devuelven 401; búsqueda
+por POST sin autorización devuelve 401. El navegador muestra la puerta de acceso
+sin datos privados. No se inició una llamada.
+
+Se corrigió además el descubrimiento de tests de Vitest para excluir únicamente
+scripts/*.test.mjs (usan node:test, se ejecutan por separado). La invocación sin
+filtros confundía ambos runners. Resultado posterior: pnpm exec vitest run,
+210 aprobadas / 3 omitidas; node --test, 8 aprobadas; typecheck y lint focalizado
+aprobados. Esta corrección sólo afecta al runner local, no a la aplicación.

@@ -120,3 +120,32 @@ scripts/*.test.mjs (usan node:test, se ejecutan por separado). La invocación si
 filtros confundía ambos runners. Resultado posterior: pnpm exec vitest run,
 210 aprobadas / 3 omitidas; node --test, 8 aprobadas; typecheck y lint focalizado
 aprobados. Esta corrección sólo afecta al runner local, no a la aplicación.
+
+## Entrega final en testers
+
+- SHA desplegado: e60de84929a5c8de691c12de34243127cefc057c.
+- Deployment Preview: dpl_BgQm4tyxrSv5YqP2H2oHvs3Wv6sE, READY.
+- URL inmutable: https://liveavatar-web-sdk-demo-4eqpurlu7.vercel.app.
+- Único alias movido: https://testers.betaskintech.com.
+- Build normal read-only: preflight listo, 11 productos; compilación completada.
+- Antes y después del corte: raíz protegida 307, cron sin Bearer 401,
+  rutina sin identidad 401. design_preview no habilita bypass remoto (307).
+- Alias testers leído nuevamente: coincide con el deployment final.
+- Alias clara.betaskintech.com leído nuevamente: conserva
+  dpl_9YX7sMRM9huyjpGPUmCGTiX24Dqf. No se ejecutó rollback porque pasó el smoke.
+- Rollback disponible de testers: liveavatar-web-sdk-demo-5ji0fo1z0.vercel.app
+  (dpl_BphahP28HcwREVJ5oCC9u5iCZjft). Mantener las tablas aditivas de QA.
+- Lint completo demo y typecheck final pasaron.
+
+No se modificaron themes, agentes, voz, webhooks ni secretos. No hubo push,
+merge ni cambios en la base productiva. Los scripts operativos no se ejecutan
+en el build normal y no agregan endpoints públicos.
+
+Pendiente DEL USUARIO: entrar por el acceso QA habitual, verificar diseño en
+inicio/llamada/resumen/rutina, hablar y guardar una rutina, cambiar de pestaña
+y finalizar. Confirmar audio, resumen en español, productos y persistencia al
+reingresar. No se hizo una llamada real ni se aprobó esa prueba manual.
+
+Siguiente paso DEL AGENTE después del reporte manual: revisar cualquier
+regresión y preparar la promoción visual, sin ejecutar un corte productivo
+como parte de esta autorización de Preview.

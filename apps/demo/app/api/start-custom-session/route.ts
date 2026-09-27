@@ -38,6 +38,33 @@ function identifierSuffix(value: unknown): string | null {
 
 const PROVIDER_TIMEOUT_MS = 20_000;
 
+function shouldLogFlowDiagnostics(): boolean {
+  return (process.env.VERCEL_ENV || process.env.NODE_ENV) !== "production";
+}
+
+function logFlowTiming(
+  traceId: string,
+  span: "overall" | "provider" | "database",
+  elapsedMs: number,
+  outcome: "ok" | "failed",
+): void {
+  if (!shouldLogFlowDiagnostics()) return;
+  try {
+    logger.info(
+      "[CLARA_FLOW] startup_timing",
+      {
+        diagnosticTraceId: traceId,
+        span,
+        elapsedMs: Math.max(0, Math.round(elapsedMs)),
+        outcome,
+      },
+      { route: "/api/start-custom-session" },
+    );
+  } catch {
+    // Logging must never change startup behavior.
+  }
+}
+
 class ProviderTimeoutError extends Error {
   constructor() {
     super("Provider request timed out");
@@ -68,6 +95,8 @@ function createProviderDeadline() {
 }
 
 export async function POST(request: NextRequest) {
+  const diagnosticStartedAt = performance.now();
+  const diagnosticTraceId = randomUUID();
   // === RATE LIMIT CHECK ===
   // Cast to NextRequest for rate limiting (headers are compatible)
   const limitResult = await rateLimitByEndpoint(
@@ -249,6 +278,7 @@ export async function POST(request: NextRequest) {
     { route: "/api/start-custom-session" },
   );
 
+  const providerStartedAt = performance.now();
   try {
     const providerDeadline = createProviderDeadline();
     try {
@@ -358,6 +388,18 @@ export async function POST(request: NextRequest) {
           { route: "/api/start-custom-session" },
         );
 
+        logFlowTiming(
+          diagnosticTraceId,
+          "provider",
+          performance.now() - providerStartedAt,
+          "failed",
+        );
+        logFlowTiming(
+          diagnosticTraceId,
+          "overall",
+          performance.now() - diagnosticStartedAt,
+          "failed",
+        );
         await cancelReservation();
         return new Response(
           JSON.stringify({
@@ -390,6 +432,18 @@ export async function POST(request: NextRequest) {
       providerDeadline.cleanup();
     }
   } catch (error: unknown) {
+    logFlowTiming(
+      diagnosticTraceId,
+      "provider",
+      performance.now() - providerStartedAt,
+      "failed",
+    );
+    logFlowTiming(
+      diagnosticTraceId,
+      "overall",
+      performance.now() - diagnosticStartedAt,
+      "failed",
+    );
     if (error instanceof ProviderTimeoutError) {
       logger.warn("[HEYGEN] Provider session creation timed out", null, {
         route: "/api/start-custom-session",
@@ -450,6 +504,18 @@ export async function POST(request: NextRequest) {
     logger.error("[HEYGEN] Empty session token received", null, {
       route: "/api/start-custom-session",
     });
+    logFlowTiming(
+      diagnosticTraceId,
+      "provider",
+      performance.now() - providerStartedAt,
+      "failed",
+    );
+    logFlowTiming(
+      diagnosticTraceId,
+      "overall",
+      performance.now() - diagnosticStartedAt,
+      "failed",
+    );
     return new Response(
       JSON.stringify({
         error: "Failed to retrieve session token",
@@ -466,6 +532,13 @@ export async function POST(request: NextRequest) {
       },
     );
   }
+
+  logFlowTiming(
+    diagnosticTraceId,
+    "provider",
+    performance.now() - providerStartedAt,
+    "ok",
+  );
 
   if (shopifyCustomerKey) {
     try {
@@ -487,6 +560,7 @@ export async function POST(request: NextRequest) {
   // Attaching the provider session is useful for operations, but correlation
   // still works through consultation_id if this secondary update fails.
   let consultationPersistenceAvailable = true;
+  const databaseStartedAt = performance.now();
   try {
     await attachClaraLiveAvatarSession(consultationId, session_id);
     logger.debug(
@@ -495,6 +569,12 @@ export async function POST(request: NextRequest) {
       {
         route: "/api/start-custom-session",
       },
+    );
+    logFlowTiming(
+      diagnosticTraceId,
+      "database",
+      performance.now() - databaseStartedAt,
+      "ok",
     );
   } catch (dbError) {
     // Don't fail the request if DB tracking fails - just log it
@@ -511,12 +591,26 @@ export async function POST(request: NextRequest) {
       },
       { route: "/api/start-custom-session" },
     );
+    logFlowTiming(
+      diagnosticTraceId,
+      "database",
+      performance.now() - databaseStartedAt,
+      "failed",
+    );
   }
+
+  logFlowTiming(
+    diagnosticTraceId,
+    "overall",
+    performance.now() - diagnosticStartedAt,
+    "ok",
+  );
 
   return new Response(
     JSON.stringify({
       session_token,
       session_id,
+      diagnostic_trace_id: diagnosticTraceId,
       consultation_id: consultationId,
       consultation_access_token: consultationAccessToken,
       consultation_persistence_available: consultationPersistenceAvailable,

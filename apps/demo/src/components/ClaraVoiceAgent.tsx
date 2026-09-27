@@ -33,6 +33,8 @@ import type {
 import type { ClaraCatalogProduct } from "../shopify/types";
 import { routineGoalsText } from "../consultations/routine";
 import { releaseConsultation } from "../consultations/release";
+import { pollConsultationResult } from "../consultations/poll-result";
+import { ClaraFlowDiagnosticEvent } from "../liveavatar/flow-diagnostics";
 import styles from "./ClaraVoiceAgent.module.css";
 import { SavedRoutinePanel, SavedRoutineStatus } from "./SavedRoutinePanel";
 import { ShopifyVerificationStates } from "./ShopifyVerificationStates";
@@ -235,6 +237,7 @@ interface LandingScreenProps {
   previewPermission?: "request" | "denied";
   designOnly?: boolean;
   onViewSavedRoutine?: () => void;
+  onViewLastConsultation?: () => void;
   onStartCall: () => Promise<void>;
   isLoading: boolean;
   userName?: string | null;
@@ -247,6 +250,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
   previewPermission,
   designOnly = false,
   onViewSavedRoutine,
+  onViewLastConsultation,
   onStartCall,
   isLoading,
   userName,
@@ -391,6 +395,16 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
               </span>
             </span>
             <ArrowUpRight size={22} aria-hidden="true" />
+          </button>
+        )}
+        {!showPermission && onViewLastConsultation && (
+          <button
+            type="button"
+            className={styles.textButton}
+            onClick={onViewLastConsultation}
+            disabled={isLoading}
+          >
+            Volver a mi consulta
           </button>
         )}
       </div>
@@ -549,8 +563,14 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
   const { fixedHeight, isInIframe } = useFixedHeight();
 
   // State from context — driven by SDK events (AgentEventsEnum / VoiceChatEvent)
-  const { sessionRef, customerData, isMuted, isUserTalking, isAvatarTalking } =
-    useLiveAvatarContext();
+  const {
+    sessionRef,
+    customerData,
+    isMuted,
+    isUserTalking,
+    isAvatarTalking,
+    flowDiagnostics,
+  } = useLiveAvatarContext();
   const { isStreamReady, connectionQuality, attachElement } = useSession();
 
   // Local state: "thinking" = between USER_SPEAK_ENDED and AVATAR_SPEAK_STARTED
@@ -935,6 +955,16 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
     }
 
     const abortController = new AbortController();
+    const onPlaying = () =>
+      flowDiagnostics?.mark(ClaraFlowDiagnosticEvent.MEDIA_PLAYING);
+    video.addEventListener("playing", onPlaying, { once: true });
+    let firstFrameHandle: number | null = null;
+    if (video.requestVideoFrameCallback) {
+      firstFrameHandle = video.requestVideoFrameCallback(() => {
+        firstFrameHandle = null;
+        flowDiagnostics?.mark(ClaraFlowDiagnosticEvent.FIRST_FRAME);
+      });
+    }
     const readiness = waitForMediaPlaybackReady(video, {
       signal: abortController.signal,
     });
@@ -964,8 +994,13 @@ const ConnectedSession: React.FC<ConnectedSessionProps> = ({
         setIsMediaPlaybackReady(true);
       });
 
-    return () => abortController.abort();
-  }, [isStreamReady, attachElement, chromaKeyEnabled]);
+    return () => {
+      abortController.abort();
+      video.removeEventListener("playing", onPlaying);
+      if (firstFrameHandle !== null)
+        video.cancelVideoFrameCallback?.(firstFrameHandle);
+    };
+  }, [isStreamReady, attachElement, chromaKeyEnabled, flowDiagnostics]);
 
   // Keep-alive with margin before the provider's five-minute boundary.
   useEffect(() => {
@@ -1348,6 +1383,8 @@ interface SessionRecapProps {
   customerData?: CustomerData | null;
   result?: ClaraConsultationResult | null;
   processingError?: string | null;
+  onRetrySummary?: () => void;
+  releaseState?: "releasing" | "released" | "unconfirmed" | null;
   onViewChange: (view: RecapView) => void;
   onTalkAgain: () => void;
 }
@@ -1361,6 +1398,8 @@ export const SessionRecap: React.FC<SessionRecapProps> = ({
   customerData,
   result = null,
   processingError = null,
+  onRetrySummary,
+  releaseState = null,
   onViewChange,
   onTalkAgain,
 }) => {
@@ -1385,6 +1424,32 @@ export const SessionRecap: React.FC<SessionRecapProps> = ({
           >
             {processingError || "Preparando tu resumen…"}
           </h1>
+          {hasRoutine && (
+            <p className={styles.recapText}>Tu rutina está guardada.</p>
+          )}
+          {onViewSavedRoutine && (
+            <button
+              type="button"
+              className={styles.secondaryButton}
+              onClick={onViewSavedRoutine}
+            >
+              {hasRoutine ? "Ver mi rutina" : "Mi rutina guardada"}
+            </button>
+          )}
+          {processingError && onRetrySummary && (
+            <button
+              type="button"
+              className={styles.secondaryButton}
+              onClick={onRetrySummary}
+            >
+              Consultar resumen de nuevo
+            </button>
+          )}
+          {releaseState === "unconfirmed" && (
+            <p className={styles.errorNote}>
+              No pudimos confirmar la liberación del acceso.
+            </p>
+          )}
           {processingError && (
             <button
               type="button"
@@ -1491,12 +1556,35 @@ export const SessionRecap: React.FC<SessionRecapProps> = ({
           Tu conversación con Clara
         </h1>
         <p className={styles.recapMeta}>Hoy · {minutes} min</p>
+        {releaseState === "releasing" && (
+          <p className={styles.recapMeta} role="status">
+            Liberando el acceso…
+          </p>
+        )}
+        {releaseState === "unconfirmed" && (
+          <p className={styles.errorNote} role="status">
+            No pudimos confirmar la liberación del acceso. Tu rutina no se borra
+            por esto.
+          </p>
+        )}
         <div className={styles.recapCard}>
           <div className={styles.eyebrow}>Resumen de tu consulta</div>
           <p className={styles.recapText}>
             {result?.summary ||
-              "La consulta terminó, pero el resumen todavía no está disponible."}
+              processingError ||
+              "Tu resumen sigue procesándose."}
           </p>
+          {onRetrySummary && processingError && (
+            <button
+              type="button"
+              className={styles.textButton}
+              onClick={onRetrySummary}
+            >
+              {result?.summary
+                ? "Actualizar consulta"
+                : "Consultar resumen de nuevo"}
+            </button>
+          )}
         </div>
         {product && (
           <div className={styles.recapCard}>
@@ -1508,8 +1596,8 @@ export const SessionRecap: React.FC<SessionRecapProps> = ({
           <div className={styles.recapCard} role="status">
             <div className={styles.eyebrow}>Rutina de esta consulta</div>
             <p className={styles.recapText}>
-              Esta consulta no tiene una nueva rutina guardada. Si ya guardaste
-              una anteriormente, puedes consultarla en «Mi rutina guardada».
+              Todavía no confirmamos una nueva rutina. Puedes consultar tu
+              rutina guardada.
             </p>
           </div>
         )}
@@ -1789,6 +1877,11 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
 }) => {
   const [showSavedRoutine, setShowSavedRoutine] = useState(false);
   const [sessionToken, setSessionToken] = useState<string | null>(null);
+  const [diagnosticTiming, setDiagnosticTiming] = useState<{
+    traceId: string | null;
+    startedAt: number;
+    tokenReceivedAt: number;
+  } | null>(null);
   const [chromaKeyEnabled, setChromaKeyEnabled] = useState(false);
   const [chromaSettings, setChromaSettings] = useState<{
     minHue?: number;
@@ -1808,6 +1901,12 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
     useState<ClaraConsultationResult | null>(null);
   const [consultationProcessingError, setConsultationProcessingError] =
     useState<string | null>(null);
+  const [recapPolling, setRecapPolling] = useState(false);
+  const [pollRevision, setPollRevision] = useState(0);
+  const [releaseState, setReleaseState] = useState<
+    "releasing" | "released" | "unconfirmed" | null
+  >(null);
+  const releaseGeneration = useRef(0);
   const [conversationMemory, setConversationMemory] =
     useState<ClaraConversationMemory>([]);
   const sessionStartedAtRef = useRef<number | null>(null);
@@ -1867,9 +1966,11 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
     setIsStarting(true);
     setError(null);
     setConversationMemory([]);
+    setRecapPolling(false);
+    const requestedAt = performance.now();
 
     try {
-      // Use LITE mode with ElevenLabs Plugin (HeyGen handles STT/LLM/TTS server-side)
+      // LITE connector: ElevenLabs handles conversation; LiveAvatar renders it.
       const res = await fetch("/api/start-custom-session", {
         method: "POST",
         headers: {
@@ -1923,8 +2024,17 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
         consultation_access_token,
         consultation_persistence_available,
         conversation_memory,
+        diagnostic_trace_id,
       } = await res.json();
+      setDiagnosticTiming({
+        traceId:
+          typeof diagnostic_trace_id === "string" ? diagnostic_trace_id : null,
+        startedAt: requestedAt,
+        tokenReceivedAt: performance.now(),
+      });
       sessionStartedAtRef.current = Date.now();
+      releaseGeneration.current += 1;
+      setReleaseState(null);
       setRecapView(null);
       setConsultationResult(null);
       setConsultationProcessingError(null);
@@ -1959,11 +2069,17 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
     sessionStartedAtRef.current = null;
     setSessionToken(null);
     setRecapView("preparing");
+    setConsultationProcessingError(null);
+    setRecapPolling(true);
     if (consultationCredentials) {
+      setReleaseState("releasing");
+      const generation = releaseGeneration.current;
       void releaseConsultation(
         consultationCredentials.id,
         consultationCredentials.accessToken,
       ).then((released) => {
+        if (generation !== releaseGeneration.current) return;
+        setReleaseState(released ? "released" : "unconfirmed");
         if (!released)
           toast.error(
             "No pudimos confirmar el cierre. Revisá tu conexión antes de volver a intentar.",
@@ -1973,65 +2089,58 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
   }, [consultationCredentials]);
 
   useEffect(() => {
-    if (recapView !== "preparing") return;
+    if (!recapPolling) return;
     if (!consultationCredentials) {
       setConsultationProcessingError(
         "No pudimos preparar el resumen de esta conversación.",
       );
+      setRecapPolling(false);
       return;
     }
-
-    let cancelled = false;
-    let attempts = 0;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-
-    const pollResult = async () => {
-      attempts += 1;
-      try {
-        const response = await fetch(
-          `/api/consultations/${encodeURIComponent(consultationCredentials.id)}`,
-          {
-            headers: {
-              "x-consultation-token": consultationCredentials.accessToken,
-            },
-            cache: "no-store",
-          },
-        );
-        if (response.ok) {
-          const result = (await response.json()) as ClaraConsultationResult;
-          if (!cancelled && result.summary) {
-            setConsultationResult(result);
-            setRecapView("summary");
-            return;
-          }
+    const controller = new AbortController();
+    void pollConsultationResult({
+      ...consultationCredentials,
+      signal: controller.signal,
+      onResult: (result) => {
+        setConsultationResult(result);
+        if (
+          result.summary ||
+          result.routine?.steps.length ||
+          result.status === "completed"
+        ) {
+          setRecapView((view) => (view === "preparing" ? "summary" : view));
         }
-      } catch {
-        // ElevenLabs analysis is asynchronous; transient failures are retried.
-      }
+      },
+    }).then((outcome) => {
+      if (controller.signal.aborted) return;
+      setRecapPolling(false);
+      setConsultationProcessingError(
+        outcome === "ready"
+          ? null
+          : outcome === "partial"
+            ? "Todavía no confirmamos una nueva rutina. Puedes volver a consultar."
+            : outcome === "pending"
+              ? "Tu resumen sigue pendiente. Puedes volver a consultarlo."
+              : outcome === "unauthorized"
+                ? "Tu acceso venció. Vuelve a entrar desde la tienda."
+                : "No pudimos consultar el resumen. Puedes intentarlo de nuevo.",
+      );
+    });
+    return () => controller.abort();
+  }, [recapPolling, consultationCredentials, pollRevision]);
 
-      if (cancelled) return;
-      if (attempts >= 30) {
-        setConsultationProcessingError(
-          "El resumen está tardando más de lo esperado. La conversación quedó guardada para procesarla.",
-        );
-        return;
-      }
-      timer = setTimeout(pollResult, 1000);
-    };
-
-    void pollResult();
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-    };
-  }, [recapView, consultationCredentials]);
+  const retrySummary = useCallback(() => {
+    setConsultationProcessingError(null);
+    setPollRevision((value) => value + 1);
+    setRecapPolling(true);
+  }, []);
 
   const handleTalkAgain = useCallback(() => {
     setRecapView(null);
     setError(null);
-    setConsultationCredentials(null);
-    setConsultationResult(null);
-    setConsultationProcessingError(null);
+    setRecapPolling(false);
+    // Keep the last consultation capability only in this component's memory.
+    // A new successful call replaces it; no token is persisted in browser storage.
   }, []);
 
   const containerStyle =
@@ -2092,6 +2201,8 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
           customerData={customerData}
           result={consultationResult}
           processingError={consultationProcessingError}
+          onRetrySummary={consultationCredentials ? retrySummary : undefined}
+          releaseState={releaseState}
           onViewChange={setRecapView}
           onTalkAgain={handleTalkAgain}
           onViewSavedRoutine={() => setShowSavedRoutine(true)}
@@ -2105,10 +2216,21 @@ export const ClaraVoiceAgent: React.FC<ClaraVoiceAgentProps> = ({
           isRateLimited={isRateLimited}
           rateLimitCountdown={rateLimitCountdown}
           onViewSavedRoutine={() => setShowSavedRoutine(true)}
+          onViewLastConsultation={
+            consultationCredentials
+              ? () => {
+                  setRecapView(consultationResult ? "summary" : "preparing");
+                  retrySummary();
+                }
+              : undefined
+          }
         />
       ) : (
         <LiveAvatarContextProvider
           sessionAccessToken={sessionToken}
+          diagnosticTraceId={diagnosticTiming?.traceId}
+          diagnosticStartedAt={diagnosticTiming?.startedAt}
+          diagnosticTokenReceivedAt={diagnosticTiming?.tokenReceivedAt}
           userName={userName}
           customerData={activeCustomerData}
         >

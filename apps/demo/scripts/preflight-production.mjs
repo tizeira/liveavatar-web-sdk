@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { readReleaseManifest } from "./release-manifest.mjs";
 
 const REQUIRED_PRODUCTION_ENV = [
   "BETA_ACCESS_PASSWORD_HASH",
@@ -40,6 +41,7 @@ const REQUIRED_RELEASE_GATES = [
   "voicePostCallQa",
   "mobileDesktopQa",
 ];
+const APPROVED_PRODUCTION_DOMAIN = "clara.betaskintech.com";
 
 function productionEnvironmentNames() {
   const command =
@@ -53,11 +55,10 @@ function productionEnvironmentNames() {
           ],
         ]
       : ["vercel", ["env", "ls", "production", "--json", "--no-color"]];
-  const output = execFileSync(
-    command[0],
-    command[1],
-    { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
-  );
+  const output = execFileSync(command[0], command[1], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
   const jsonLine = output.match(/(?:^|\r?\n)\s*([\[{])/);
   if (jsonLine?.index === undefined) throw new Error("Vercel returned no JSON");
   const jsonStart = jsonLine.index + jsonLine[0].lastIndexOf(jsonLine[1]);
@@ -72,7 +73,12 @@ function productionEnvironmentNames() {
 
 function runbook() {
   return readFileSync(
-    fileURLToPath(new URL("../../../docs/release/clara-production-runbook.md", import.meta.url)),
+    fileURLToPath(
+      new URL(
+        "../../../docs/release/clara-production-runbook.md",
+        import.meta.url,
+      ),
+    ),
     "utf8",
   );
 }
@@ -85,13 +91,17 @@ function currentCommitSha() {
 }
 
 function releaseEvidence() {
-  const argument = process.argv.find((value) => value.startsWith("--evidence="));
+  const argument = process.argv.find((value) =>
+    value.startsWith("--evidence="),
+  );
   if (!argument) {
     return { errors: ["Pass --evidence=<release-evidence.json>."] };
   }
 
   try {
-    const evidence = JSON.parse(readFileSync(argument.slice("--evidence=".length), "utf8"));
+    const evidence = JSON.parse(
+      readFileSync(argument.slice("--evidence=".length), "utf8"),
+    );
     const errors = [];
     const sha = currentCommitSha();
 
@@ -106,7 +116,9 @@ function releaseEvidence() {
       (gate) => evidence.gates?.[gate] !== true,
     );
     if (missingGates.length) {
-      errors.push(`Release evidence has pending gates: ${missingGates.join(", ")}`);
+      errors.push(
+        `Release evidence has pending gates: ${missingGates.join(", ")}`,
+      );
     }
 
     return { errors };
@@ -114,6 +126,30 @@ function releaseEvidence() {
     return { errors: ["Could not read valid JSON release evidence."] };
   }
 }
+
+function releaseManifest() {
+  const argument = process.argv.find((value) =>
+    value.startsWith("--manifest="),
+  );
+  if (!argument)
+    return { errors: ["Pass --manifest=<release-manifest.json>."] };
+  try {
+    readReleaseManifest(argument.slice("--manifest=".length), {
+      currentSha: currentCommitSha(),
+      approvedDomain: APPROVED_PRODUCTION_DOMAIN,
+    });
+    return { errors: [] };
+  } catch (error) {
+    return { errors: [error.message] };
+  }
+}
+
+const manifest = releaseManifest();
+if (manifest.errors.length) {
+  for (const error of manifest.errors) console.error(error);
+  process.exit(1);
+}
+console.log("Release identity manifest matches this commit.");
 
 let names;
 try {
@@ -137,14 +173,18 @@ const missingSections = REQUIRED_RUNBOOK_SECTIONS.filter(
 if (missingSections.length) {
   console.error(`Missing runbook sections: ${missingSections.join(", ")}`);
 } else {
-  console.log("Snapshot, migration, deployment, and rollback plan is documented.");
+  console.log(
+    "Snapshot, migration, deployment, and rollback plan is documented.",
+  );
 }
 
 const evidence = releaseEvidence();
 if (evidence.errors.length) {
   for (const error of evidence.errors) console.error(error);
 } else {
-  console.log("Release evidence matches this commit and all required gates are approved.");
+  console.log(
+    "Release evidence matches this commit and all required gates are approved.",
+  );
 }
 
 if (missing.length || missingSections.length || evidence.errors.length) {

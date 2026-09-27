@@ -40,4 +40,6 @@ export type ClaraConsultationResult = {
   summary: string | null;
   routine: ClaraRoutine | null;
   transcript: ClaraTranscriptTurn[];
+  /** Opaque optimistic-write revision; absent on older deployments. */
+  routineRevision?: string;
 };

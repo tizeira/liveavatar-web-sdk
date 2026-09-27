@@ -149,4 +149,70 @@ describe("Clara LAB presentation contracts", () => {
     expect(html).toContain("No pudimos validar tu acceso");
     expect(html).not.toContain("Hablar con Clara");
   });
+
+  it("keeps a persisted routine visible while its summary and release are pending", () => {
+    const html = renderToStaticMarkup(
+      <SessionRecap
+        {...actions}
+        view="summary"
+        durationSeconds={60}
+        result={{
+          consultationId: "fixture",
+          status: "routine_ready",
+          summary: null,
+          transcript: [],
+          routine: {
+            concerns: [],
+            cautions: [],
+            steps: [
+              {
+                moment: "morning",
+                order: 1,
+                instruction: "Fixture",
+                product: null,
+              },
+            ],
+          },
+        }}
+        processingError="Tu resumen sigue pendiente."
+        onRetrySummary={vi.fn()}
+        onViewSavedRoutine={vi.fn()}
+        releaseState="unconfirmed"
+      />,
+    );
+    expect(html).toContain("Ver mi rutina");
+    expect(html).toContain("Consultar resumen de nuevo");
+    expect(html).toContain("No pudimos confirmar la liberación");
+    expect(html).not.toContain("no tiene una nueva rutina");
+  });
+
+  it("does not call a still-pending routine definitively absent", () => {
+    const html = renderToStaticMarkup(
+      <SessionRecap
+        {...actions}
+        view="summary"
+        durationSeconds={60}
+        result={{
+          consultationId: "fixture",
+          status: "pending",
+          summary: null,
+          transcript: [],
+          routine: null,
+        }}
+      />,
+    );
+    expect(html).toContain("Todavía no confirmamos");
+    expect(html).not.toContain("no tiene una nueva rutina guardada");
+  });
+
+  it("offers return to the last consultation only when a capability remains in memory", () => {
+    const html = renderToStaticMarkup(
+      <LandingScreen
+        onStartCall={async () => {}}
+        isLoading={false}
+        onViewLastConsultation={vi.fn()}
+      />,
+    );
+    expect(html).toContain("Volver a mi consulta");
+  });
 });

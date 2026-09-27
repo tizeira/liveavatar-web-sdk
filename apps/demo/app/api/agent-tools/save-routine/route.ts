@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { CLARA_AGENT_TOOL_SECRET } from "@/app/api/secrets";
 import { hasValidAgentToolSecret } from "@/src/consultations/security";
 import { saveClaraRoutine } from "@/src/consultations/repository";
+import { ClaraRoutineConflictError } from "@/src/consultations/write-conflict";
 import type { ClaraRoutine, ClaraRoutineStep } from "@/src/consultations/types";
 import {
   fetchClaraCatalogSnapshot,
@@ -54,6 +55,22 @@ export async function POST(request: NextRequest) {
   }
 
   const consultationId = cleanText(body.consultation_id, 64);
+  const expectedRevision = body.expected_revision;
+  if (
+    expectedRevision !== undefined &&
+    (typeof expectedRevision !== "string" ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(expectedRevision) ||
+      Number.isNaN(Date.parse(expectedRevision)))
+  ) {
+    return NextResponse.json(
+      {
+        saved: false,
+        error:
+          "expected_revision must be a valid revision returned by this service",
+      },
+      { status: 400 },
+    );
+  }
   const summary = sanitizeUserFacingSummary(cleanText(body.summary, 1200));
   const customerHasMoisturizer =
     typeof body.customer_has_moisturizer === "boolean"
@@ -247,7 +264,15 @@ export async function POST(request: NextRequest) {
 
   try {
     const neonStartedAt = performance.now();
-    await saveClaraRoutine(consultationId, summary, routine);
+    const saved =
+      expectedRevision === undefined
+        ? await saveClaraRoutine(consultationId, summary, routine)
+        : await saveClaraRoutine(
+            consultationId,
+            summary,
+            routine,
+            expectedRevision,
+          );
     const neonMs = Math.round(performance.now() - neonStartedAt);
     logger.info(
       "Clara routine tool completed",
@@ -262,11 +287,26 @@ export async function POST(request: NextRequest) {
     );
     return NextResponse.json({
       saved: true,
+      ...(saved.updatedAt
+        ? { routine_revision: saved.updatedAt.toISOString() }
+        : {}),
       routine,
       rejected_product_handles: [],
       instruction: "Routine saved with Shopify-validated product data.",
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof ClaraRoutineConflictError) {
+      return NextResponse.json(
+        {
+          saved: false,
+          retryable: false,
+          code: "routine_revision_conflict",
+          instruction:
+            "The routine changed. Read the current routine and ask for confirmation again; do not blindly replay an older proposal.",
+        },
+        { status: 409 },
+      );
+    }
     return NextResponse.json(
       { error: "Consultation not found or routine could not be saved" },
       { status: 404 },

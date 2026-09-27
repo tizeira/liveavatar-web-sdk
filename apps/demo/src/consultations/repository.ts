@@ -8,6 +8,7 @@ import type {
   ClaraTranscriptTurn,
 } from "./types";
 import { sanitizeUserFacingSummary } from "./privacy";
+import { ClaraRoutineConflictError } from "./write-conflict";
 
 const TRANSCRIPT_RETENTION_DAYS = 30;
 const RECORD_RETENTION_MONTHS = 12;
@@ -38,6 +39,7 @@ function toResult(consultation: {
   summary: string | null;
   routine: Prisma.JsonValue | null;
   transcript: Prisma.JsonValue | null;
+  updatedAt?: Date;
 }): ClaraConsultationResult {
   return {
     consultationId: consultation.id,
@@ -45,6 +47,9 @@ function toResult(consultation: {
     summary: sanitizeUserFacingSummary(consultation.summary) || null,
     routine: consultation.routine as ClaraRoutine | null,
     transcript: (consultation.transcript || []) as ClaraTranscriptTurn[],
+    ...(consultation.updatedAt
+      ? { routineRevision: consultation.updatedAt.toISOString() }
+      : {}),
   };
 }
 
@@ -68,6 +73,7 @@ export async function saveClaraRoutine(
   consultationId: string,
   summary: string,
   routine: ClaraRoutine,
+  expectedRevision?: string,
 ) {
   return prisma.$transaction(async (tx) => {
     const existing = await tx.claraConsultation.findUniqueOrThrow({
@@ -76,19 +82,55 @@ export async function saveClaraRoutine(
         status: true,
         completedAt: true,
         routineMetricRecordedAt: true,
+        routine: true,
+        summary: true,
+        updatedAt: true,
       },
     });
-    const updated = await tx.claraConsultation.update({
-      where: { id: consultationId },
-      data: {
-        summary: sanitizeUserFacingSummary(summary),
-        routine: routine as unknown as Prisma.InputJsonValue,
-        status:
-          existing.status === ClaraConsultationStatus.completed
-            ? ClaraConsultationStatus.completed
-            : ClaraConsultationStatus.routine_ready,
-      },
-    });
+    const safeSummary = sanitizeUserFacingSummary(summary);
+    // A replay of the exact persisted result has no new effects. Do not infer
+    // idempotency from spoken text or from a matching HTTP status.
+    if (
+      existing.summary === safeSummary &&
+      JSON.stringify(existing.routine) === JSON.stringify(routine)
+    ) {
+      return existing;
+    }
+    if (
+      expectedRevision &&
+      existing.updatedAt.toISOString() !== expectedRevision
+    ) {
+      throw new ClaraRoutineConflictError();
+    }
+    const updated = await tx.claraConsultation
+      .update({
+        where: {
+          id: consultationId,
+          updatedAt: existing.updatedAt,
+        },
+        data: {
+          summary: safeSummary,
+          routine: routine as unknown as Prisma.InputJsonValue,
+          updatedAt: new Date(
+            Math.max(Date.now(), (existing.updatedAt?.getTime() ?? 0) + 1),
+          ),
+          status:
+            existing.status === ClaraConsultationStatus.completed
+              ? ClaraConsultationStatus.completed
+              : ClaraConsultationStatus.routine_ready,
+        },
+      })
+      .catch((error: unknown) => {
+        // Every caller gets atomic read/write protection. Explicit revisions also
+        // detect delayed sequential writes based on an older client snapshot.
+        if (
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === "P2025"
+        ) {
+          throw new ClaraRoutineConflictError();
+        }
+        throw error;
+      });
     const routineMetricClaim =
       existing.status === ClaraConsultationStatus.completed
         ? await tx.claraConsultation.updateMany({

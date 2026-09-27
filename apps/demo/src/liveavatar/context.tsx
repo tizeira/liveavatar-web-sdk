@@ -22,6 +22,11 @@ import {
   logClaraStartupDiagnostic,
   shouldEnableClaraStartupDiagnostics,
 } from "./startup-diagnostics";
+import {
+  ClaraFlowDiagnosticEvent,
+  ClaraFlowDiagnostics,
+  logClaraFlowDiagnostic,
+} from "./flow-diagnostics";
 
 type LiveAvatarContextProps = {
   sessionRef: React.RefObject<ElevenLabsAgentSession>;
@@ -42,6 +47,7 @@ type LiveAvatarContextProps = {
   // Personalization
   userName: string | null;
   customerData: CustomerData | null;
+  flowDiagnostics: ClaraFlowDiagnostics | null;
 };
 
 export const LiveAvatarContext = createContext<LiveAvatarContextProps>({
@@ -59,6 +65,7 @@ export const LiveAvatarContext = createContext<LiveAvatarContextProps>({
   messages: [],
   userName: null,
   customerData: null,
+  flowDiagnostics: null,
 });
 
 type LiveAvatarContextProviderProps = {
@@ -66,6 +73,11 @@ type LiveAvatarContextProviderProps = {
   sessionAccessToken: string;
   userName?: string | null;
   customerData?: CustomerData | null;
+  /** Opaque preview-only correlation id returned by session startup. */
+  diagnosticTraceId?: string | null;
+  /** Monotonic client ticks captured around the actual startup request. */
+  diagnosticStartedAt?: number;
+  diagnosticTokenReceivedAt?: number;
 };
 
 const useSessionState = (
@@ -149,6 +161,7 @@ const useVoiceChatState = (
 
 const useTalkingState = (
   sessionRef: React.RefObject<ElevenLabsAgentSession>,
+  flowDiagnosticsRef: React.RefObject<ClaraFlowDiagnostics | null>,
 ) => {
   const [isUserTalking, setIsUserTalking] = useState(false);
   const [isAvatarTalking, setIsAvatarTalking] = useState(false);
@@ -158,10 +171,30 @@ const useTalkingState = (
     if (!session) return;
 
     // Named handlers for proper cleanup
-    const handleUserStart = () => setIsUserTalking(true);
-    const handleUserEnd = () => setIsUserTalking(false);
-    const handleAvatarStart = () => setIsAvatarTalking(true);
-    const handleAvatarEnd = () => setIsAvatarTalking(false);
+    const handleUserStart = () => {
+      setIsUserTalking(true);
+      flowDiagnosticsRef.current?.observeAgentEvent(
+        ClaraFlowDiagnosticEvent.USER_SPEAK_STARTED,
+      );
+    };
+    const handleUserEnd = () => {
+      setIsUserTalking(false);
+      flowDiagnosticsRef.current?.observeAgentEvent(
+        ClaraFlowDiagnosticEvent.USER_SPEAK_ENDED,
+      );
+    };
+    const handleAvatarStart = () => {
+      setIsAvatarTalking(true);
+      flowDiagnosticsRef.current?.observeAgentEvent(
+        ClaraFlowDiagnosticEvent.AVATAR_SPEAK_STARTED,
+      );
+    };
+    const handleAvatarEnd = () => {
+      setIsAvatarTalking(false);
+      flowDiagnosticsRef.current?.observeAgentEvent(
+        ClaraFlowDiagnosticEvent.AVATAR_SPEAK_ENDED,
+      );
+    };
 
     session.on(AgentEventsEnum.USER_SPEAK_STARTED, handleUserStart);
     session.on(AgentEventsEnum.USER_SPEAK_ENDED, handleUserEnd);
@@ -175,7 +208,7 @@ const useTalkingState = (
       session.off(AgentEventsEnum.AVATAR_SPEAK_STARTED, handleAvatarStart);
       session.off(AgentEventsEnum.AVATAR_SPEAK_ENDED, handleAvatarEnd);
     };
-  }, [sessionRef]);
+  }, [sessionRef, flowDiagnosticsRef]);
 
   return { isUserTalking, isAvatarTalking };
 };
@@ -209,6 +242,9 @@ export const LiveAvatarContextProvider = ({
   sessionAccessToken,
   userName = null,
   customerData = null,
+  diagnosticTraceId = null,
+  diagnosticStartedAt,
+  diagnosticTokenReceivedAt,
 }: LiveAvatarContextProviderProps) => {
   // Keep construction side-effect free during render. The diagnostic callback is
   // registered before a child can call session.start(), but starts no timers
@@ -218,6 +254,17 @@ export const LiveAvatarContextProvider = ({
   const startupDisposeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
+  const flowDiagnosticsRef = useRef<ClaraFlowDiagnostics | null>(null);
+  const flowMilestonesReportedRef = useRef(false);
+  if (!flowDiagnosticsRef.current && diagnosticTraceId) {
+    const flow = new ClaraFlowDiagnostics({
+      enabled: shouldEnableClaraStartupDiagnostics(),
+      traceId: diagnosticTraceId,
+      startedAt: diagnosticStartedAt,
+      log: logClaraFlowDiagnostic,
+    });
+    flowDiagnosticsRef.current = flow;
+  }
   if (!startupDiagnosticsRef.current) {
     startupDiagnosticsRef.current = new ClaraStartupDiagnostics({
       enabled: shouldEnableClaraStartupDiagnostics(),
@@ -234,8 +281,10 @@ export const LiveAvatarContextProvider = ({
     sessionRef.current = new ElevenLabsAgentSession(sessionAccessToken, {
       voiceChat: true,
       apiUrl: API_URL,
-      onDiagnosticEvent: (entry) =>
-        startupDiagnosticsRef.current?.observe(entry),
+      onDiagnosticEvent: (entry) => {
+        startupDiagnosticsRef.current?.observe(entry);
+        flowDiagnosticsRef.current?.observeSdk(entry);
+      },
     });
   }
 
@@ -245,23 +294,44 @@ export const LiveAvatarContextProvider = ({
       startupDisposeTimerRef.current = null;
     }
     startupDiagnosticsRef.current?.resume();
+    flowDiagnosticsRef.current?.resume();
+    if (flowDiagnosticsRef.current && !flowMilestonesReportedRef.current) {
+      flowMilestonesReportedRef.current = true;
+      if (Number.isFinite(diagnosticStartedAt)) {
+        flowDiagnosticsRef.current.mark(
+          ClaraFlowDiagnosticEvent.SESSION_START_REQUESTED,
+          diagnosticStartedAt,
+        );
+      }
+      if (Number.isFinite(diagnosticTokenReceivedAt)) {
+        flowDiagnosticsRef.current.mark(
+          ClaraFlowDiagnosticEvent.SESSION_TOKEN_RECEIVED,
+          diagnosticTokenReceivedAt,
+        );
+      }
+    }
 
     return () => {
       // Strict Mode replays effects once in development. Pause immediately so
       // late promises cannot log, then permit the paired setup to resume.
       startupDiagnosticsRef.current?.suspend();
+      flowDiagnosticsRef.current?.suspend();
       startupDisposeTimerRef.current = setTimeout(() => {
         startupDiagnosticsRef.current?.dispose();
+        flowDiagnosticsRef.current?.dispose();
         startupDisposeTimerRef.current = null;
       }, 0);
     };
-  }, []);
+  }, [diagnosticStartedAt, diagnosticTokenReceivedAt]);
 
   const { sessionState, isStreamReady, connectionQuality } =
     useSessionState(sessionRef);
 
   const { isMuted, voiceChatState } = useVoiceChatState(sessionRef);
-  const { isUserTalking, isAvatarTalking } = useTalkingState(sessionRef);
+  const { isUserTalking, isAvatarTalking } = useTalkingState(
+    sessionRef,
+    flowDiagnosticsRef,
+  );
   const widgetState = useWidgetState(sessionState, isStreamReady);
 
   return (
@@ -279,6 +349,7 @@ export const LiveAvatarContextProvider = ({
         messages: [], // TODO - properly implement chat history
         userName,
         customerData,
+        flowDiagnostics: flowDiagnosticsRef.current,
       }}
     >
       {children}

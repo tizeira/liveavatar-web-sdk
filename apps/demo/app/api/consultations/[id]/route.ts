@@ -23,6 +23,7 @@ export async function GET(
       status: consultation.status,
       summary: consultation.summary,
       routine: consultation.routine,
+      routineRevision: consultation.routineRevision,
       transcript: consultation.transcript,
     },
     {

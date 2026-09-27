@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
+import { ClaraRoutineConflictError } from "@/src/consultations/write-conflict";
 
 process.env.CLARA_AGENT_TOOL_SECRET = "test-tool-secret";
 
@@ -145,6 +146,55 @@ describe("Clara Shopify product tool", () => {
 
 describe("Clara routine tool", () => {
   const consultationId = "51bcaeed-9e1b-4c75-ad05-7b23fbd9d46f";
+
+  const revisionBody = {
+    consultation_id: consultationId,
+    summary: "Rutina sin productos acordada.",
+    expected_revision: "2026-09-27T12:00:00.000Z",
+    steps: [{ moment: "morning", order: 1, instruction: "Lavar el rostro" }],
+  };
+
+  it("passes the revision and returns the persisted revision on success", async () => {
+    mockSaveRoutine.mockResolvedValue({
+      updatedAt: new Date("2026-09-27T12:00:01.000Z"),
+    });
+    const response = await routineRoute.POST(
+      request("/api/agent-tools/save-routine", revisionBody),
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      saved: true,
+      routine_revision: "2026-09-27T12:00:01.000Z",
+    });
+    expect(mockSaveRoutine.mock.calls[0]?.[3]).toBe(
+      revisionBody.expected_revision,
+    );
+  });
+
+  it("reports conflict without claiming a save or suggesting blind retry", async () => {
+    mockSaveRoutine.mockRejectedValue(new ClaraRoutineConflictError());
+    const response = await routineRoute.POST(
+      request("/api/agent-tools/save-routine", revisionBody),
+    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      saved: false,
+      retryable: false,
+      code: "routine_revision_conflict",
+    });
+  });
+
+  it("rejects invalid revision before catalog or persistence calls", async () => {
+    const response = await routineRoute.POST(
+      request("/api/agent-tools/save-routine", {
+        ...revisionBody,
+        expected_revision: "yesterday",
+      }),
+    );
+    expect(response.status).toBe(400);
+    expect(mockSaveRoutine).not.toHaveBeenCalled();
+    expect(mockFetchProducts).not.toHaveBeenCalled();
+  });
 
   it("rejects invented or unavailable Shopify product handles without saving", async () => {
     const response = await routineRoute.POST(

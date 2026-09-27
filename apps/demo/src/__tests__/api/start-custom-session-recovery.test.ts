@@ -99,6 +99,9 @@ describe("provider failure recovery (offline, mocked persistence)", () => {
 
     const response = await POST(request());
     expect(response.status).toBe(200);
+    expect((await response.clone().json()).diagnostic_trace_id).toMatch(
+      /^[a-f0-9-]{36}$/i,
+    );
     expect(mocks.deriveTesterKey).toHaveBeenCalledWith(
       "tester@example.com",
       "test-only",

@@ -102,7 +102,7 @@ describe("saved routine presentation", () => {
       />,
     );
     expect(html).toContain("Mi rutina guardada");
-    expect(html).toContain("Esta consulta no tiene una nueva rutina guardada");
+    expect(html).toContain("Todavía no confirmamos una nueva rutina");
     expect(html).not.toContain("Rutina pendiente");
   });
 });
